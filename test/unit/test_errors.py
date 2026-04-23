@@ -413,7 +413,7 @@ def test_error_with_context():
 
 
 # ============================================================================
-# Boolean Error Flag Handling Tests (PatentsView API)
+# Boolean Error Flag Handling Tests
 # ============================================================================
 
 @pytest.mark.unit

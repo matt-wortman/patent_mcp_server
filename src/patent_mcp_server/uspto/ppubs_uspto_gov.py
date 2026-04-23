@@ -388,7 +388,8 @@ class PpubsClient:
             document_type: Document type
 
         Returns:
-            Dictionary with PDF content (base64) or error
+            Dictionary with raw PDF bytes under "content" on success, or an
+            error dict on failure. Shape mirrors api_uspto_gov.download_file().
         """
         # Ensure we have a session
         if self.case_id is None:
@@ -431,7 +432,7 @@ class PpubsClient:
             logger.info(f"Downloading PDF: {pdf_name}")
             request = self.client.build_request(
                 HTTPMethods.GET,
-                f"{config.PPUBS_BASE_URL}/api/internal/print/save/{pdf_name}",
+                f"{config.PPUBS_BASE_URL}/api/print/save/{pdf_name}",
             )
 
             response = await self.client.send(request, stream=True)
@@ -442,16 +443,15 @@ class PpubsClient:
                     status_code=response.status_code
                 )
 
-            # Return the PDF as base64
+            # Return raw PDF bytes; caller decides where to save.
             content = await response.aread()
-            import base64
-            b64_content = base64.b64encode(content).decode('utf-8')
 
             return {
                 "success": True,
                 "filename": f"{guid}.pdf",
                 "content_type": "application/pdf",
-                "content": b64_content
+                "content": content,
+                "size_bytes": len(content),
             }
 
         except Exception as e:

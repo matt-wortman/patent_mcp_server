@@ -20,17 +20,17 @@ relevant to an invention. Follow this structured approach:
 Start with broad text searches to understand the landscape:
 
 ```
-Use patentsview_search_patents or ppubs_search_patents:
+Use ppubs_search_patents:
 - Search key terms from the invention description
 - Try synonyms and alternative phrasings
-- Use search_type="any" for broad results first
+- Use broad queries first
 ```
 
 ## Step 3: Identify Relevant CPC Codes
 From initial results, identify CPC classification codes:
 
 ```
-Use patentsview_lookup_cpc to understand classifications:
+Use get_cpc_info to understand classifications:
 - Note CPC codes from relevant patents found
 - Look up parent/child codes for broader/narrower scope
 ```
@@ -39,7 +39,7 @@ Use patentsview_lookup_cpc to understand classifications:
 Search within relevant CPC classifications:
 
 ```
-Use patentsview_search_by_cpc:
+Use ppubs_search_patents with CPC field filters:
 - Focus on identified CPC codes
 - Combine with keywords if needed
 ```
@@ -48,17 +48,18 @@ Use patentsview_search_by_cpc:
 Find patents from key players in the field:
 
 ```
-Use patentsview_search_inventors and patentsview_search_assignees:
-- Search for prolific inventors in the field
-- Find competitors' patent portfolios
+Use odp_search_applications:
+- Use "First Last" format for inventor names (e.g., "Sonata Jodele")
+- "Last First" format returns 404 from the ODP API
+- Avoid wildcards for inventor names (they match too broadly)
 ```
 
 ## Step 6: Citation Analysis
 Review what prior art examiners have cited:
 
 ```
-Use get_office_action_citations:
-- Check citations from related applications
+Use dsapi_search_enriched_citations and dsapi_search_oa_citations:
+- Check citations from related patents
 - Follow citation chains backward and forward
 ```
 
@@ -74,8 +75,8 @@ Use ppubs_search_patents for PCT applications published in US:
 ## Tips:
 - Document all searches performed for completeness
 - Save relevant patent numbers for detailed review
-- Check patent family relationships with get_app_continuity
-- Review full claims using patentsview_get_claims
+- Check patent family relationships with odp_get_continuity
+- Review full claims using ppubs_get_full_document or odp_get_documents
 """
 
 PATENT_VALIDITY_ANALYSIS_PROMPT = """
@@ -85,7 +86,7 @@ Analyze the validity and prosecution history of a patent to assess its strength.
 
 ## Step 1: Get Patent Details
 ```
-Use ppubs_get_patent_by_number or patentsview_get_patent:
+Use ppubs_get_patent_by_number:
 - Review claims (especially independent claims)
 - Note the filing and priority dates
 - Identify the assignee and inventors
@@ -93,7 +94,7 @@ Use ppubs_get_patent_by_number or patentsview_get_patent:
 
 ## Step 2: Review Claims
 ```
-Use patentsview_get_claims:
+Use ppubs_get_full_document or odp_get_documents:
 - Identify independent vs dependent claims
 - Note claim scope and key limitations
 - Look for potential narrow vs broad interpretations
@@ -101,18 +102,18 @@ Use patentsview_get_claims:
 
 ## Step 3: Examine Prosecution History
 ```
-Use get_app (with application number) to get file wrapper data:
+Use odp_get_application (with application number) to get file wrapper data:
 - Review office action history
 - Check amendments made during prosecution
 - Note any disclaimer or terminal disclaimers
 ```
 
-## Step 4: Review Office Actions
+## Step 4: Review Prosecution History
 ```
-Use get_office_action_text and get_office_action_rejections:
-- See what prior art examiner cited
-- Understand rejection bases (102, 103, 112)
-- Review applicant's arguments and claim amendments
+Use odp_get_transactions and odp_get_documents:
+- Review office action history from the file wrapper
+- Check amendments made during prosecution
+- Note any disclaimer or terminal disclaimers
 ```
 
 ## Step 5: Check PTAB Proceedings
@@ -123,25 +124,17 @@ Use ptab_search_proceedings with the patent number:
 - Examine final written decisions if available
 ```
 
-## Step 6: Review Litigation History
+## Step 6: Citation Analysis
 ```
-Use get_patent_litigation_history:
-- Check for past infringement suits
-- Review outcomes and claim construction rulings
-- Note any settlements or licensing
-```
-
-## Step 7: Citation Analysis
-```
-Use get_enriched_citations:
+Use dsapi_search_enriched_citations and dsapi_search_oa_citations:
 - Review forward citations (indicator of importance)
 - Check backward citations for prior art
-- Analyze citation metrics
+- Analyze citation patterns
 ```
 
-## Step 8: Family Analysis
+## Step 7: Family Analysis
 ```
-Use get_app_continuity:
+Use odp_get_continuity:
 - Identify parent/child applications
 - Check for continuation claim variations
 - Note any related patents with different claim scope
@@ -162,15 +155,15 @@ Analyze a company's patent portfolio to understand their IP position and strateg
 ## Step 1: Identify Company Variations
 Companies often file under different names:
 ```
-Use patentsview_search_assignees:
+Use odp_search_applications with assignee filters:
 - Search for company name and variations
 - Note subsidiary names
-- Record disambiguated assignee IDs
+- Record application numbers for further lookup
 ```
 
 ## Step 2: Get Portfolio Overview
 ```
-Use patentsview_search with assignee filter:
+Use odp_search_applications with assignee name:
 - Get count of total patents
 - Identify date range of filings
 - Note technology distribution by CPC
@@ -178,7 +171,7 @@ Use patentsview_search with assignee filter:
 
 ## Step 3: Technology Focus Analysis
 ```
-Use patentsview_search_by_cpc:
+Use ppubs_search_patents with CPC field filters:
 - Identify top CPC codes in portfolio
 - Map technology areas covered
 - Find gaps or emerging focus areas
@@ -186,7 +179,7 @@ Use patentsview_search_by_cpc:
 
 ## Step 4: Inventor Analysis
 ```
-Use patentsview_search_inventors:
+Use odp_search_applications with inventor name filters:
 - Identify key inventors
 - Track inventor movement (acquired talent)
 - Find prolific inventors by patent count
@@ -202,21 +195,13 @@ Search with date filters:
 
 ## Step 6: Citation Analysis
 ```
-Use get_enriched_citations on key patents:
+Use dsapi_search_enriched_citations on key patents:
 - Identify most-cited patents (crown jewels)
 - Find citation relationships with competitors
 - Analyze technology influence
 ```
 
-## Step 7: Litigation Profile
-```
-Use get_party_litigation_history:
-- Review assertion history (offensive use)
-- Check defense cases (being sued)
-- Identify frequent opponents
-```
-
-## Step 8: PTAB Exposure
+## Step 7: PTAB Exposure
 ```
 Use ptab_search_proceedings with party name:
 - Count IPR/PGR challenges received
@@ -260,15 +245,7 @@ Use ptab_get_proceeding:
 - Note challenged claims
 ```
 
-## Step 3: Review Documents
-```
-Use ptab_get_proceeding_documents:
-- Get petition and patent owner response
-- Review expert declarations
-- Find settlement documents if terminated
-```
-
-## Step 4: Search Related Decisions
+## Step 3: Search Related Decisions
 ```
 Use ptab_search_decisions:
 - Find institution decision
@@ -276,7 +253,7 @@ Use ptab_search_decisions:
 - Review any terminations or settlements
 ```
 
-## Step 5: Analyze Decision
+## Step 4: Analyze Decision
 ```
 Use ptab_get_decision:
 - Review claim-by-claim determinations
@@ -284,14 +261,7 @@ Use ptab_get_decision:
 - Understand Board's reasoning
 ```
 
-## Step 6: Check Appeals
-```
-Use ptab_search_appeals:
-- Find ex parte appeal decisions
-- Review CAFC appeals of PTAB decisions
-```
-
-## Step 7: Party History
+## Step 5: Party History
 ```
 Use ptab_search_proceedings with party_name:
 - Find other proceedings involving same parties
@@ -319,7 +289,7 @@ Assess the risk of patent infringement for a product or technology.
 
 ## Step 2: Keyword and Classification Search
 ```
-Use patentsview_search and patentsview_search_by_cpc:
+Use ppubs_search_patents:
 - Search for each technical feature
 - Use multiple synonyms and phrasings
 - Focus on relevant CPC classifications
@@ -333,7 +303,7 @@ For each patent found, evaluate:
 
 ## Step 4: Detailed Claim Analysis
 ```
-Use patentsview_get_claims and ppubs_get_patent_by_number:
+Use ppubs_get_patent_by_number and ppubs_get_full_document:
 - Read independent claims carefully
 - Compare each claim element to your product
 - Document any differences (design-arounds)
@@ -341,7 +311,7 @@ Use patentsview_get_claims and ppubs_get_patent_by_number:
 
 ## Step 5: Check Patent Status
 ```
-Use get_app_metadata and get_app_transactions:
+Use odp_get_application_metadata and odp_get_transactions:
 - Verify patent is not expired
 - Check for maintenance fee status
 - Note any terminal disclaimers
@@ -349,7 +319,7 @@ Use get_app_metadata and get_app_transactions:
 
 ## Step 6: Review Prosecution History
 ```
-Use get_office_action_text and get_office_action_rejections:
+Use odp_get_transactions and odp_get_documents:
 - Understand scope limitations from prosecution
 - Note any estoppel from claim amendments
 - Review applicant's arguments for claim interpretation
@@ -361,14 +331,6 @@ Use ptab_search_proceedings:
 - See if patents have been challenged
 - Review any claim invalidations
 - Note surviving claims
-```
-
-## Step 8: Assess Litigation History
-```
-Use get_patent_litigation_history:
-- Check if patent has been asserted
-- Review claim construction rulings
-- Note any licenses or settlements
 ```
 
 ## Risk Assessment Categories:
@@ -395,7 +357,7 @@ Map the patent landscape for a technology area to understand the competitive env
 
 ## Step 2: Identify Key CPC Classifications
 ```
-Use patentsview_lookup_cpc:
+Use get_cpc_info:
 - Find relevant CPC codes
 - Map hierarchical relationships
 - Note any cross-cutting codes
@@ -403,7 +365,7 @@ Use patentsview_lookup_cpc:
 
 ## Step 3: Quantitative Analysis
 ```
-Use patentsview_search_by_cpc with large limits:
+Use ppubs_search_patents with CPC filters and large limits:
 - Count total patents per CPC code
 - Track filings over time
 - Identify growth trends
@@ -411,7 +373,7 @@ Use patentsview_search_by_cpc with large limits:
 
 ## Step 4: Top Assignee Analysis
 ```
-Use patentsview_search_assignees:
+Use odp_search_applications with assignee filters:
 - Rank companies by patent count
 - Calculate market share of filings
 - Identify new entrants vs incumbents
@@ -419,7 +381,7 @@ Use patentsview_search_assignees:
 
 ## Step 5: Geographic Distribution
 ```
-Use patentsview_search_patents with assignee filters:
+Use odp_search_applications with location/assignee filters:
 - Compare filing volumes by assignee location
 - Identify regional leaders among US filers
 - Note PCT (WO) filing trends via ppubs_search_applications
@@ -433,10 +395,10 @@ Group patents into sub-categories:
 
 ## Step 7: Citation Network Analysis
 ```
-Use get_enriched_citations:
+Use dsapi_search_enriched_citations on key patents:
 - Identify highly-cited foundational patents
 - Map citation relationships
-- Find technology leaders by citation metrics
+- Find technology leaders by citation volume
 ```
 
 ## Step 8: White Space Analysis

@@ -198,53 +198,10 @@ CPC_SECTIONS = {
     },
 }
 
-# USPTO Application Status Codes
-STATUS_CODES = {
-    # Examination Status
-    "30": {"description": "Docketed New Case - Ready for Examination", "stage": "examination"},
-    "31": {"description": "Non-Final Action Mailed", "stage": "examination"},
-    "32": {"description": "Final Action Mailed", "stage": "examination"},
-    "33": {"description": "Response to Non-Final Office Action Entered", "stage": "examination"},
-    "34": {"description": "Response after Final Action Forwarded to Examiner", "stage": "examination"},
-    "35": {"description": "Advisory Action Mailed", "stage": "examination"},
-    "36": {"description": "Notice of Allowance Mailed", "stage": "allowance"},
-    "37": {"description": "Amendment/Argument after Notice of Allowance", "stage": "allowance"},
-    "38": {"description": "Issue Fee Payment Received", "stage": "allowance"},
-    "39": {"description": "Issue Fee Payment Verified", "stage": "allowance"},
-
-    # Appeal Status
-    "40": {"description": "Appeal Brief Filed", "stage": "appeal"},
-    "41": {"description": "Notice of Appeal Filed", "stage": "appeal"},
-    "42": {"description": "Appeal Forwarded to Board of Appeals", "stage": "appeal"},
-    "43": {"description": "Board of Appeals Decision Rendered", "stage": "appeal"},
-    "44": {"description": "On Appeal - Awaiting Board Decision", "stage": "appeal"},
-
-    # Pre-Examination
-    "10": {"description": "Application Received in Office of Initial Patent Exam", "stage": "pre-exam"},
-    "11": {"description": "Application Dispatched from Preexam", "stage": "pre-exam"},
-    "12": {"description": "Request for Continued Examination (RCE)", "stage": "examination"},
-
-    # Post-Grant
-    "50": {"description": "Patent Issued", "stage": "granted"},
-    "51": {"description": "Patent Expired Due to NonPayment of Fees", "stage": "expired"},
-    "52": {"description": "Reissue Application Filed", "stage": "reissue"},
-    "53": {"description": "Reexamination Ordered", "stage": "reexam"},
-
-    # Abandonment
-    "60": {"description": "Abandoned - Failure to Respond to Office Action", "stage": "abandoned"},
-    "61": {"description": "Abandoned - Failure to Pay Issue Fee", "stage": "abandoned"},
-    "62": {"description": "Expressly Abandoned", "stage": "abandoned"},
-    "63": {"description": "Abandoned - Incomplete Application", "stage": "abandoned"},
-
-    # Publication
-    "70": {"description": "Published Application", "stage": "published"},
-    "71": {"description": "Non-Publication Request Acknowledged", "stage": "pre-pub"},
-
-    # Continuity
-    "80": {"description": "Continuation Application Filed", "stage": "continuity"},
-    "81": {"description": "Divisional Application Filed", "stage": "continuity"},
-    "82": {"description": "Continuation-in-Part Application Filed", "stage": "continuity"},
-}
+# USPTO Application Status Codes are no longer maintained statically.
+# The authoritative list (233 codes) lives in DSAPI
+# oce_patent_examination_status_codes/v1 and is surfaced via
+# dsapi_lookup_status_code / get_status_code.
 
 # Data Sources Information
 DATA_SOURCES = {
@@ -285,102 +242,43 @@ DATA_SOURCES = {
             "Continuity data (parent/child relationships)",
         ],
     },
-    "patentsview": {
-        "name": "PatentsView Patent Search API",
-        "base_url": "N/A",
-        "description": (
-            "SHUT DOWN. The PatentsView API (search.patentsview.org) was shut "
-            "down on March 20, 2026. Data has been migrated to the USPTO Open "
-            "Data Portal as bulk downloadable datasets (Granted Patent "
-            "Disambiguated Data, Pre-Grant Publication Disambiguated Data, "
-            "Long Text Data, Sorted Patent Data). Use ppubs_search_patents "
-            "for patent search, odp_search_datasets to find bulk datasets."
-        ),
-        "coverage": {
-            "patents": "Use ppubs_search_patents or ppubs_get_patent_by_number",
-            "inventors": "Bulk data via odp_search_datasets (PatentsView disambiguated data)",
-            "assignees": "Bulk data via odp_search_datasets (PatentsView disambiguated data)",
-        },
-        "rate_limits": "N/A",
-        "auth_required": False,
-        "best_for": [
-            "Patent search (UNAVAILABLE - use ppubs_search_patents)",
-            "Inventor disambiguation (UNAVAILABLE - use odp_search_datasets for bulk data)",
-            "Assignee disambiguation (UNAVAILABLE - use odp_search_datasets for bulk data)",
-            "CPC searches (UNAVAILABLE - use ppubs_search_patents with CPC query)",
-            "Patent claims/description (UNAVAILABLE - use ppubs_get_full_document)",
-        ],
-    },
     "ptab": {
-        "name": "USPTO PTAB Trial API",
-        "base_url": "N/A",
-        "description": (
-            "UNAVAILABLE. The PTAB Trial API is not available on the USPTO "
-            "Open Data Portal (api.uspto.gov). The legacy PTAB API at "
-            "developer.uspto.gov was retired, and no PTAB endpoints are "
-            "listed in the ODP Swagger catalog at "
-            "https://data.uspto.gov/swagger/index.html. Use ppubs_* tools to "
-            "locate PTAB-related documents, or download PTAB bulk data from "
-            "https://developer.uspto.gov/data."
-        ),
+        "name": "USPTO PTAB API v3 (via ODP)",
+        "base_url": "https://api.uspto.gov/api/v1/patent/trials",
+        "portal_url": "https://data.uspto.gov",
+        "description": "Patent Trial and Appeal Board data - IPR, PGR, CBM proceedings. Migrated to ODP; requires ODP API key.",
         "coverage": {
-            "proceedings": "Unavailable - no ODP endpoint",
-            "decisions": "Unavailable - no ODP endpoint",
-            "appeals": "Unavailable - no ODP endpoint",
+            "proceedings": "IPR, PGR, CBM, derivation proceedings from 2012",
+            "decisions": "Institution and final written decisions",
+            "appeals": "Ex parte appeal decisions",
+            "interferences": "Historical interference proceedings (pre-AIA)",
         },
-        "rate_limits": "N/A",
-        "auth_required": False,
-        "best_for": [
-            "IPR/PGR/CBM proceeding research (UNAVAILABLE - use ppubs_search_patents)",
-            "PTAB decision analysis (UNAVAILABLE - download bulk data from developer.uspto.gov/data)",
-            "Appeal outcomes (UNAVAILABLE - use ppubs_search_patents)",
-            "Patent validity challenges (UNAVAILABLE - use ppubs_search_patents)",
-        ],
-    },
-    "office_actions": {
-        "name": "USPTO Office Action APIs",
-        "base_url": "N/A",
-        "description": (
-            "TEMPORARILY UNAVAILABLE. Legacy endpoints at developer.uspto.gov "
-            "were decommissioned in early 2026. Migration to ODP (api.uspto.gov) "
-            "is pending. Use odp_get_documents to access office action documents "
-            "from the file wrapper as a workaround."
-        ),
-        "coverage": {
-            "applications": "Unavailable pending ODP migration",
-            "citations": "Use odp_get_documents or ppubs tools",
-            "rejections": "Use odp_get_documents to find office action documents",
-        },
-        "rate_limits": "N/A",
+        "rate_limits": "Requires ODP API key, standard rate limits apply",
         "auth_required": True,
         "best_for": [
-            "Office action full text (UNAVAILABLE - use odp_get_documents)",
-            "Examiner citation analysis (UNAVAILABLE - use odp_get_documents)",
-            "Rejection pattern analysis (UNAVAILABLE - use odp_get_documents)",
-            "Prosecution strategy research (use odp_get_transactions instead)",
+            "IPR/PGR/CBM proceeding research",
+            "PTAB decision analysis",
+            "Appeal outcomes",
+            "Patent validity challenges",
         ],
     },
-    "litigation": {
-        "name": "USPTO Patent Litigation API",
-        "base_url": "N/A",
-        "description": (
-            "UNAVAILABLE. The Patent Litigation API is not available on the "
-            "USPTO Open Data Portal (api.uspto.gov) and is not listed in the "
-            "ODP Swagger catalog. The OCE Patent Litigation dataset (74,000+ "
-            "district court cases) is distributed as a bulk download at "
-            "https://www.uspto.gov/ip-policy/economic-research/research-"
-            "datasets/patent-litigation-docket-reports-data."
-        ),
+    "dsapi": {
+        "name": "USPTO Data Set API (DSAPI)",
+        "base_url": "https://api.uspto.gov/api/v1/patent/oa",
+        "description": "Bulk dataset access for office actions, enriched citations, patent litigation, and examination status codes. Requires USPTO_API_KEY (same key as ODP tools).",
         "coverage": {
-            "cases": "Unavailable via API - use OCE bulk dataset",
-            "date_range": "Unavailable via API - use OCE bulk dataset",
+            "office_actions": "Full-text OA actions, rejections (§101/102/103/112), and citations for 12-series applications (June 2018+)",
+            "enriched_citations": "Enriched cited reference metadata with examiner/applicant origin flags (v3)",
+            "litigation": "74,000+ district court patent cases (OCE patent litigation cases v1)",
+            "status_codes": "233 USPTO examination status codes with descriptions",
         },
-        "rate_limits": "N/A",
-        "auth_required": False,
+        "rate_limits": "Requires USPTO_API_KEY (same key as ODP tools), standard rate limits apply",
+        "auth_required": True,
         "best_for": [
-            "Patent litigation history (UNAVAILABLE - use OCE bulk dataset)",
-            "Company litigation profiles (UNAVAILABLE - use OCE bulk dataset)",
-            "Patent enforcement patterns (UNAVAILABLE - use OCE bulk dataset)",
+            "Office action text and rejection analysis",
+            "Citation provenance (examiner vs. applicant cited)",
+            "Patent litigation case research",
+            "Examination status code lookups",
         ],
     },
 }
@@ -391,55 +289,28 @@ SEARCH_SYNTAX_GUIDE = """
 
 ## PPUBS (Patent Public Search)
 
-PPUBS uses a field-based search syntax:
+PPUBS uses BRS (Boolean Retrieval System) syntax with periods.
+Format: `value.field_code.` — the search value comes FIRST, then the field code
+surrounded by periods.
 
-### Common Fields:
-- `TTL/` - Title
-- `ABST/` - Abstract
-- `ACLM/` - All Claims
-- `SPEC/` - Specification/Description
-- `ISD/` - Issue Date (format: YYYYMMDD)
-- `APD/` - Application Date
-- `IN/` - Inventor Name
-- `AN/` - Assignee Name
-- `PN/` - Patent Number
-- `CPC/` - CPC Classification
-
-### Example Queries:
-- `TTL/"machine learning"` - Title contains "machine learning"
-- `IN/Smith AND AN/IBM` - Inventor Smith, assigned to IBM
-- `CPC/G06N3/08` - Neural network patents
-- `ISD/20230101->20231231` - Patents issued in 2023
-
----
-
-## PatentsView
-
-PatentsView uses JSON query syntax:
-
-### Operators:
-- `_eq` - Equals
-- `_neq` - Not equals
-- `_gt`, `_gte` - Greater than (or equal)
-- `_lt`, `_lte` - Less than (or equal)
-- `_begins` - Starts with
-- `_contains` - Contains
-- `_text_any` - Full-text match any word
-- `_text_all` - Full-text match all words
-- `_text_phrase` - Full-text exact phrase
+### Common Field Codes:
+- `.ttl.` - Title
+- `.abst.` - Abstract
+- `.aclm.` - All Claims
+- `.spec.` - Specification/Description
+- `.isd.` - Issue Date (format: YYYYMMDD)
+- `.apd.` - Application Date
+- `.in.` - Inventor Name
+- `.an.` - Assignee Name
+- `.pn.` - Patent Number
+- `.cpc.` - CPC Classification
 
 ### Example Queries:
-```json
-{"patent_title": {"_contains": "neural network"}}
-{"_and": [
-    {"patent_date": {"_gte": "2020-01-01"}},
-    {"assignee_organization": {"_contains": "IBM"}}
-]}
-{"_or": [
-    {"_text_any": {"patent_title": "machine learning"}},
-    {"_text_any": {"patent_abstract": "machine learning"}}
-]}
-```
+- `"machine learning".ttl.` - Title contains "machine learning"
+- `Smith.in. AND IBM.an.` - Inventor Smith, assignee IBM
+- `G06N3/08.cpc.` - Neural network patents
+- `20230101->20231231.isd.` - Patents issued in 2023
+- `(Sonata AND Jodele).in.` - Boolean combination in inventor field
 
 ---
 
@@ -449,12 +320,45 @@ PatentsView uses JSON query syntax:
 - `q` - General query string
 - `applicationNumberText` - Application number
 - `patentNumber` - Patent number
-- `inventorName` - Inventor name
+- `inventorName` - Inventor name (**"First Last" format required**, e.g., "Sonata Jodele"; "Last First" returns 404)
 - `assigneeName` - Assignee name
 - `appFilingDate` - Filing date range
 
+### Inventor Name Format (IMPORTANT):
+- Use **"First Last"** order: `inventorName=Sonata Jodele`
+- **"Last First"** order returns 404 from the API
+- Wildcards (e.g., `Jodele*`) match too broadly and should be avoided
+
 ### Example:
 `q=machine learning&appFilingDate=2020-01-01,2023-12-31`
+
+---
+
+## DSAPI (Data Set API — api.uspto.gov)
+
+DSAPI datasets use **Apache Lucene** query syntax.
+
+### Query Syntax:
+- `field:value` — exact field match
+- `field:value*` — prefix wildcard
+- `field:"exact phrase"` — phrase match
+- `field:[A TO Z]` — range query
+- Boolean operators: `AND`, `OR`, `NOT` (must be uppercase)
+- Grouping: `(term1 OR term2) AND term3`
+
+### Common Fields by Dataset:
+- **Office Actions**: `applicationNumberText`, `mailDate`, `actionType`
+- **Rejections**: `applicationNumberText`, `rejectionBasisCode` (101, 102, 103, 112)
+- **Enriched Citations**: `patentApplicationNumber`, `citedDocumentNumber`
+- **Litigation**: `patentNumber`, `caseNumber`, `plaintiffName`, `defendantName`
+
+### Example Queries:
+```
+applicationNumberText:16123456
+rejectionBasisCode:103 AND applicationNumberText:16*
+patentNumber:10000000 AND plaintiffName:Apple*
+citedDocumentNumber:US7861317*
+```
 
 ---
 
@@ -503,20 +407,6 @@ def get_cpc_subsection_info(code: str) -> dict:
                 }
 
     return {"error": f"Unknown CPC code: {code}"}
-
-
-def get_status_code_info(code: str) -> dict:
-    """Get information about a USPTO status code."""
-    if code in STATUS_CODES:
-        info = STATUS_CODES[code].copy()
-        info["code"] = code
-        return info
-    return {"error": f"Unknown status code: {code}"}
-
-
-def get_all_status_codes() -> dict:
-    """Get all USPTO status codes."""
-    return STATUS_CODES
 
 
 def get_data_source_info(source: str) -> dict:

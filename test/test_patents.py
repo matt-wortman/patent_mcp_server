@@ -143,10 +143,11 @@ async def test_ppubs_direct():
                 
                 if content and success:
                     try:
-                        import base64
-                        pdf_content = base64.b64decode(content)
+                        # download_image() now returns raw bytes directly
+                        # (no base64); write them straight to disk.
+                        pdf_content = content if isinstance(content, (bytes, bytearray)) else bytes(content)
                         filename = pdf_result.get("filename", f"patent_{patent_number}.pdf")
-                        
+
                         # Save PDF to pdfs directory
                         pdf_filepath = os.path.join("pdfs", filename)
                         os.makedirs(os.path.dirname(pdf_filepath), exist_ok=True)

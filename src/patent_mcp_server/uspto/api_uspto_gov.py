@@ -173,6 +173,70 @@ class ApiUsptoClient:
             logger.error(f"Unexpected error: {str(e)}")
             return ApiError.from_exception(e, f"Request to {url} failed")
 
+    @retry(
+        stop=stop_after_attempt(config.MAX_RETRIES),
+        wait=wait_exponential(
+            multiplier=config.RETRY_DELAY,
+            min=config.RETRY_MIN_WAIT,
+            max=config.RETRY_MAX_WAIT
+        ),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
+        reraise=True
+    )
+    async def download_file(self, url: str) -> Dict[str, Any]:
+        """Download a file from the USPTO API and return raw bytes.
+
+        Uses the same X-API-KEY authentication as make_request but handles
+        binary content (PDFs, DOCX files) instead of JSON.
+
+        Args:
+            url: Full download URL (from odp_get_documents downloadUrl field)
+
+        Returns:
+            Dict with 'content' (bytes), 'content_type', and 'size_bytes' on success,
+            or error dict on failure.
+        """
+        headers = {
+            "User-Agent": config.USER_AGENT,
+            "X-API-KEY": config.USPTO_API_KEY if config.USPTO_API_KEY else ""
+        }
+
+        logger.info(f"Downloading file from {url}")
+
+        try:
+            response = await self.client.get(
+                url,
+                headers=headers,
+                timeout=config.REQUEST_TIMEOUT
+            )
+
+            response.raise_for_status()
+            content = response.content
+            content_type = response.headers.get("content-type", "application/octet-stream")
+            logger.info(f"Download successful: {len(content)} bytes, type={content_type}")
+
+            return {
+                "content": content,
+                "content_type": content_type,
+                "size_bytes": len(content)
+            }
+
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code
+            logger.error(f"Download HTTP error: {status_code}")
+            return ApiError.from_http_error(
+                status_code=status_code,
+                response_text=e.response.text
+            )
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.warning(f"Network error during download (will retry): {str(e)}")
+            raise  # Let tenacity handle the retry
+
+        except Exception as e:
+            logger.error(f"Unexpected download error: {str(e)}")
+            return ApiError.from_exception(e, f"Download from {url} failed")
+
     async def close(self):
         """Close the client connections and clean up resources."""
         logger.info("Closing api.uspto.gov client connections")

@@ -9,6 +9,8 @@ This module provides utilities for:
 
 import json
 import logging
+import os
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from patent_mcp_server.config import config
@@ -33,7 +35,7 @@ class ResponseEnvelope:
 
         Args:
             results: The actual results data
-            source: Data source identifier (e.g., 'patentsview', 'ppubs', 'odp')
+            source: Data source identifier (e.g., 'ppubs', 'odp', 'ptab', 'dsapi')
             count: Number of results in this response
             total: Total available results (for pagination)
             offset: Current offset position
@@ -147,45 +149,6 @@ class ResponseEnvelope:
         )
 
     @staticmethod
-    def from_patentsview(
-        raw_response: Dict[str, Any],
-        offset: int = 0,
-        limit: int = 100,
-    ) -> Dict[str, Any]:
-        """Normalize a PatentsView API response.
-
-        Args:
-            raw_response: Raw response from PatentsView API
-            offset: Requested offset
-            limit: Requested limit
-
-        Returns:
-            Standardized response
-        """
-        # PatentsView format: {patents: [...], count, total_hits}
-        # or {assignees: [...], count} etc.
-        results = (
-            raw_response.get("patents") or
-            raw_response.get("assignees") or
-            raw_response.get("inventors") or
-            raw_response.get("claims") or
-            raw_response.get("g_claim") or
-            raw_response.get("g_brf_sum_text") or
-            raw_response.get("g_detail_desc_text") or
-            []
-        )
-        total = raw_response.get("total_hits") or raw_response.get("count", len(results))
-
-        return ResponseEnvelope.success(
-            results=results,
-            source="patentsview",
-            count=len(results) if isinstance(results, list) else 1,
-            total=total,
-            offset=offset,
-            limit=limit,
-        )
-
-    @staticmethod
     def from_ptab(
         raw_response: Dict[str, Any],
         offset: int = 0,
@@ -201,7 +164,25 @@ class ResponseEnvelope:
         Returns:
             Standardized response
         """
-        results = raw_response.get("results", raw_response.get("data", []))
+        # PTAB API v3 (migrated to ODP) returns data under endpoint-specific
+        # DataBag keys, similar to ODP's patentFileWrapperDataBag pattern.
+        # Search the known PTAB response keys first, then fall back to generic keys.
+        _PTAB_RESPONSE_KEYS = [
+            "patentTrialProceedingDataBag",     # /proceedings/search
+            "patentTrialDecisionDataBag",       # /decisions/search
+            "patentTrialDocumentDataBag",       # /proceedings/{id}/documents
+            "patentTrialAppealDecisionDataBag", # /appeals/decisions/search
+            "patentTrialInterferenceDataBag",   # /interferences/search
+            # Generic fallbacks (legacy or future format changes)
+            "results",
+            "data",
+        ]
+        results = []
+        for key in _PTAB_RESPONSE_KEYS:
+            val = raw_response.get(key)
+            if val is not None:
+                results = val
+                break
         total = raw_response.get("total", raw_response.get("count", len(results) if isinstance(results, list) else 1))
 
         return ResponseEnvelope.success(
@@ -235,12 +216,87 @@ def estimate_tokens(data: Any) -> int:
         return len(str(data)) // 4
 
 
+def _save_oversized_to_disk(
+    response: Dict[str, Any],
+    source: str,
+) -> Dict[str, Any]:
+    """Serialize an oversized response to disk and return a summary envelope.
+
+    Writes the full response as JSON to
+    ``{config.DOWNLOAD_DIR}/oversized_{source}_{timestamp}.json`` and returns
+    a small summary that replaces the `results` payload so the caller stays
+    under the token budget.
+    """
+    download_dir = config.DOWNLOAD_DIR
+    os.makedirs(download_dir, exist_ok=True)
+
+    timestamp = int(time.time() * 1000)
+    safe_source = source or "unknown"
+    filename = f"oversized_{safe_source}_{timestamp}.json"
+    file_path = os.path.join(download_dir, filename)
+
+    try:
+        serialized = json.dumps(response, default=str, indent=2)
+    except (TypeError, ValueError):
+        serialized = str(response)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(serialized)
+
+    size_bytes = len(serialized.encode("utf-8"))
+    est = estimate_tokens(response)
+
+    results = response.get("results")
+    if isinstance(results, dict):
+        preview_keys = sorted(results.keys())[:20]
+        shape = "dict"
+    elif isinstance(results, list):
+        preview_keys = []
+        shape = "list"
+    else:
+        preview_keys = []
+        shape = type(results).__name__
+
+    summary = {
+        "_oversized": True,
+        "_shape": shape,
+        "file_path": file_path,
+        "size_bytes": size_bytes,
+        "estimated_tokens": est,
+        "preview_keys": preview_keys,
+        "_message": (
+            "Response exceeded token budget; full payload saved to disk. "
+            "Read the file for complete data."
+        ),
+    }
+
+    logger.info(
+        f"Saved oversized response ({est} est. tokens, {size_bytes} bytes) "
+        f"to {file_path}"
+    )
+
+    truncated = response.copy()
+    truncated["results"] = summary
+    truncated["_oversized"] = True
+    truncated["_oversized_file"] = file_path
+    # Overwrite count to reflect the summary (single envelope)
+    truncated["count"] = 1
+    return truncated
+
+
 def truncate_response(
     response: Dict[str, Any],
     max_tokens: Optional[int] = None,
     max_results: int = 20,
 ) -> Dict[str, Any]:
     """Truncate a response if it exceeds token budget.
+
+    Handles three cases:
+    1. List-shaped `results` over max_results → slice to max_results.
+    2. Dict-shaped `results` (single record) still over budget → save full
+       payload to disk, replace `results` with a summary envelope.
+    3. List still oversized after slicing (each item is huge) → save full
+       payload to disk, replace `results` with a summary envelope.
 
     Args:
         response: Response dictionary to potentially truncate
@@ -257,11 +313,11 @@ def truncate_response(
     if estimated_tokens <= max_tokens:
         return response
 
-    # Need to truncate
-    truncated = response.copy()
+    source = response.get("source", "unknown")
 
-    # Try to truncate results array
-    if "results" in truncated and isinstance(truncated["results"], list):
+    # Case 1: list-shaped results — try slicing first
+    if "results" in response and isinstance(response["results"], list):
+        truncated = response.copy()
         original_count = len(truncated["results"])
         if original_count > max_results:
             truncated["results"] = truncated["results"][:max_results]
@@ -273,16 +329,28 @@ def truncate_response(
                 f"to fit within token budget. Use 'offset' parameter to paginate "
                 f"through remaining results."
             )
-
-            # Update count
             truncated["count"] = max_results
-
             logger.info(
                 f"Truncated response from {original_count} to {max_results} results "
                 f"(estimated {estimated_tokens} tokens exceeded {max_tokens} limit)"
             )
 
-    return truncated
+            # Re-check: if still oversized, fall through to disk-save
+            if estimate_tokens(truncated) > max_tokens:
+                return _save_oversized_to_disk(truncated, source)
+
+            return truncated
+
+        # List is short but still oversized — items themselves are huge.
+        return _save_oversized_to_disk(response, source)
+
+    # Case 2: dict-shaped results (single record) — save to disk
+    if "results" in response and isinstance(response["results"], dict):
+        return _save_oversized_to_disk(response, source)
+
+    # Case 3: no recognizable results envelope but oversized — also disk-save
+    # so nothing blows the context window unnoticed.
+    return _save_oversized_to_disk(response, source)
 
 
 def check_and_truncate(

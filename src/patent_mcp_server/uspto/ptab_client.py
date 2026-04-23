@@ -1,15 +1,12 @@
 """
-USPTO PTAB API Client — LEGACY / UNAVAILABLE
+USPTO PTAB API Client (Patent Trial and Appeal Board)
 
-This client targets endpoints under https://api.uspto.gov/api/v1/patent/trials
-that are not actually offered on the USPTO Open Data Portal. No PTAB
-endpoints are listed in the ODP Swagger catalog at
-https://data.uspto.gov/swagger/index.html. The legacy PTAB Trial API that
-previously lived on developer.uspto.gov has been retired; PTAB bulk data is
-available at https://developer.uspto.gov/data.
+This module provides access to the PTAB API v3 at api.uspto.gov for accessing
+Patent Trial and Appeal Board data including IPR, PGR, CBM proceedings,
+trial decisions, appeal outcomes, and interference records.
 
-This module is retained for historical reference and unit tests. The
-corresponding MCP tools in patents.py return API_UNAVAILABLE (see issue #16).
+Note: PTAB API v3 has been migrated to the Open Data Portal (ODP).
+Requires an ODP API key obtained from https://data.uspto.gov ("My ODP").
 """
 
 import logging
@@ -192,33 +189,6 @@ class PTABClient:
         """
         return await self._make_request(f"/proceedings/{proceeding_number}")
 
-    async def get_proceeding_documents(
-        self,
-        proceeding_number: str,
-        document_type: Optional[str] = None,
-        offset: int = Defaults.SEARCH_START,
-        limit: int = Defaults.API_LIMIT,
-    ) -> Dict[str, Any]:
-        """Get documents filed in a PTAB proceeding.
-
-        Args:
-            proceeding_number: The proceeding number
-            document_type: Filter by document type (petition, response, etc.)
-            offset: Starting position for pagination
-            limit: Maximum results to return
-
-        Returns:
-            Dictionary containing document list
-        """
-        params = {"offset": offset, "limit": limit}
-        if document_type:
-            params["documentType"] = document_type
-
-        return await self._make_request(
-            f"/proceedings/{proceeding_number}/documents",
-            params=params
-        )
-
     async def search_decisions(
         self,
         query: Optional[str] = None,
@@ -272,60 +242,6 @@ class PTABClient:
             Dictionary containing decision details
         """
         return await self._make_request(f"/decisions/{decision_id}")
-
-    async def search_appeals(
-        self,
-        query: Optional[str] = None,
-        application_number: Optional[str] = None,
-        patent_number: Optional[str] = None,
-        appeal_number: Optional[str] = None,
-        decision_date_from: Optional[str] = None,
-        decision_date_to: Optional[str] = None,
-        offset: int = Defaults.SEARCH_START,
-        limit: int = Defaults.API_LIMIT,
-    ) -> Dict[str, Any]:
-        """Search ex parte appeal decisions.
-
-        Args:
-            query: Full-text search query
-            application_number: Application number
-            patent_number: Patent number
-            appeal_number: Appeal number
-            decision_date_from: Decision date range start
-            decision_date_to: Decision date range end
-            offset: Starting position for pagination
-            limit: Maximum results to return
-
-        Returns:
-            Dictionary containing appeal search results
-        """
-        params = {"offset": offset, "limit": limit}
-
-        if query:
-            params["q"] = query
-        if application_number:
-            params["applicationNumber"] = application_number
-        if patent_number:
-            params["patentNumber"] = patent_number
-        if appeal_number:
-            params["appealNumber"] = appeal_number
-        if decision_date_from:
-            params["decisionDateFrom"] = decision_date_from
-        if decision_date_to:
-            params["decisionDateTo"] = decision_date_to
-
-        return await self._make_request("/appeals/decisions/search", params=params)
-
-    async def get_appeal_decision(self, appeal_number: str) -> Dict[str, Any]:
-        """Get details of a specific ex parte appeal decision.
-
-        Args:
-            appeal_number: The appeal number
-
-        Returns:
-            Dictionary containing appeal decision details
-        """
-        return await self._make_request(f"/appeals/decisions/{appeal_number}")
 
     async def search_interferences(
         self,
