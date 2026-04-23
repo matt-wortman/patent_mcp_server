@@ -23,3 +23,23 @@ wheels/
 
 # Claude Code
 .claude
+
+# Scratch and local work
+tmp/
+test/manual/
+
+# Local work product in docs/ (binaries and research artifacts — keep docs/ for repo markdown only)
+docs/*.pdf
+docs/*.docx
+docs/*.xlsx
+docs/*.png
+docs/*.py
+docs/*.js
+
+# Local research/analysis markdown (not repo docs)
+docs/2021-*
+docs/Patent_AI_Tools_for_TTOs_Report.md
+docs/USPTO_API_Reference_for_Claude.md
+docs/mcp-server-health-check-findings.md
+# Date-prefixed plans violate the repo's file-naming rule
+docs/plans/[0-9]*-*
