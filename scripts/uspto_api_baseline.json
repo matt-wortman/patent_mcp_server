@@ -38,7 +38,6 @@
       "/api/v1/patent/trials/proceedings/{trialNumber}",
       "/api/v1/patent/trials/{trialNumber}/decisions",
       "/api/v1/patent/trials/{trialNumber}/documents",
-      "/api/v1/petition/decisions/search",
       "/api/v1/petition/decisions/search/download",
       "/api/v1/petition/decisions/{petitionDecisionRecordIdentifier}"
     ]
