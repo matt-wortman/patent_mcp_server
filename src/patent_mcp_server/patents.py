@@ -551,7 +551,7 @@ async def ppubs_search_patents(
     query: str,
     offset: int = 0,
     limit: int = 100,
-    sort: str = "date_publ desc",
+    sort: str = "score desc",
 ) -> Dict[str, Any]:
     """Search granted US patents in Patent Public Search (ppubs.uspto.gov).
 
@@ -572,7 +572,10 @@ async def ppubs_search_patents(
                - (Sonata AND Jodele).in. - boolean combination in inventor field
         offset: Starting position for pagination (default: 0)
         limit: Maximum results to return (default: 100, max: 500)
-        sort: Sort order (default: "date_publ desc")
+        sort: Sort order (default: "score desc" = relevance, best matches
+              first). Use "date_publ desc" for newest-first ordering —
+              note that with common terms, date ordering surfaces whatever
+              was granted most recently rather than the best matches.
 
     Returns:
         Normalized response with patent results including GUID, title,
@@ -598,7 +601,7 @@ async def ppubs_search_applications(
     query: str,
     offset: int = 0,
     limit: int = 100,
-    sort: str = "date_publ desc",
+    sort: str = "score desc",
 ) -> Dict[str, Any]:
     """Search published US patent applications in Patent Public Search.
 
@@ -610,7 +613,8 @@ async def ppubs_search_applications(
                Format: term.field_code. (e.g., "neural network".ttl.)
         offset: Starting position for pagination (default: 0)
         limit: Maximum results to return (default: 100, max: 500)
-        sort: Sort order (default: "date_publ desc")
+        sort: Sort order (default: "score desc" = relevance, best matches
+              first). Use "date_publ desc" for newest-first ordering.
 
     Returns:
         Normalized response with application results.

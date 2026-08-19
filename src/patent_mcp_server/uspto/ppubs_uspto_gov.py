@@ -260,7 +260,7 @@ class PpubsClient:
         query: str,
         start: int = Defaults.SEARCH_START,
         limit: int = Defaults.SEARCH_LIMIT,
-        sort: str = "date_publ desc",
+        sort: str = "score desc",
         default_operator: str = "OR",
         sources: Optional[List[str]] = None,
         expand_plurals: bool = True,

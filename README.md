@@ -248,7 +248,10 @@ uv sync --dev
 
 ## Version History
 
-### v0.11.0 (Current)
+### v0.11.1 (Current)
+- PPUBS search tools now default to relevance ordering (`sort="score desc"`) instead of newest-first (`date_publ desc`), which buried the best matches under whatever was granted most recently; pass `sort="date_publ desc"` for the old behavior
+
+### v0.11.0
 - Full-codebase review and hardening pass
 - Fixed a concurrency bug where simultaneous PPUBS searches could silently run each other's query (shared search template is now deep-copied per query)
 - PPUBS PDF downloads now detect failed print jobs and time out instead of polling forever, and the whole PDF pipeline gained retry, session-refresh, and rate-limit protection
