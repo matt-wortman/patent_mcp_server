@@ -27,7 +27,7 @@ jobs:
         id: drift
         run: |
           set +e
-          uv run python scripts/check_uspto_api_coverage.py > drift-report.txt 2>&1
+          uv run python scripts/check_uspto_api_coverage.py > drift-report.txt
           code=$?
           cat drift-report.txt
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
