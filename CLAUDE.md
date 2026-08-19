@@ -17,8 +17,8 @@ Before any commit:
 # Run the full test suite
 uv run pytest
 
-# Expected output: All tests should pass (integration tests are skipped by default)
-# Example: "150 passed, 36 deselected"
+# Expected output: All tests should pass (integration and smoke tests are skipped by default)
+# Example: "93 passed, 57 deselected"
 ```
 
 If tests fail:
@@ -29,7 +29,8 @@ If tests fail:
 ### Test Organization
 
 - **Unit tests** (`test/unit/`): Run by default, mock external APIs
-- **Integration tests** (`test/test_tools.py`, `test/test_tools_pytest.py`): Require network access, skipped by default
+- **Live smoke tests** (`test/smoke/`): Real USPTO endpoints, require `USPTO_API_KEY`, skipped by default
+- **Integration tests** (`test/test_tools.py`, `test/test_patents.py`): Require network access, skipped by default
 
 To run integration tests:
 ```bash
@@ -117,7 +118,7 @@ async def tool_name(...) -> Dict[str, Any]:
 
 - Use `@pytest.mark.integration` marker
 - These tests hit real APIs and require network access
-- Place in `test/test_tools.py` or `test/test_tools_pytest.py`
+- Place in `test/test_tools.py` or `test/test_patents.py`
 
 ## Dependencies
 

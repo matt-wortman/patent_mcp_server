@@ -217,10 +217,15 @@ deeper debugging. No code change now (plan guardrail: no speculative rewrite).
 
 ## Next session's tasks verbatim
 
-Sessions 1–4 are COMPLETE; v0.11.0 is tagged on `uspto-refresh`. Remaining:
+Sessions 1–4 are COMPLETE; v0.11.0 is tagged on `uspto-refresh`.
 
-1. **Merge to `main`** (plan: "merge to main after Session 4's release gate").
-   The release gate passed; merge is ready when the user wants it.
+> **UPDATE (2026-08-19):** the merge to `main` is DONE — `main` now carries
+> v0.11.0 plus the v0.11.1 follow-up (PPUBS search defaults to relevance
+> ordering). Item 1 below is closed; only the optional Session 5 items remain.
+
+Remaining:
+
+1. ~~**Merge to `main`**~~ — DONE (see update above).
 2. **Session 5 (optional, per plan)**:
    - Live-probe first-party `GET /api/v1/patent/status-codes` (unverified, from
      a third-party client); if real, consider replacing the 2018-vintage

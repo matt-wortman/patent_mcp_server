@@ -6,9 +6,11 @@ For an introduction to MCP servers see [Introducing the Model Context Protocol](
 
 Special thanks to [Parker Hancock](https://github.com/parkerhancock), author of the amazing [Patent Client project](https://github.com/parkerhancock/patent_client), for [blazing the trail](https://github.com/parkerhancock/patent_client/issues/63) to understanding of the string of requests and responses needed to pull data through the Public Search API.
 
+**Not a developer?** There's a plain-English guide to what this tool can do and how to ask Claude for it: [docs/USER-MANUAL.md](docs/USER-MANUAL.md).
+
 ## Features
 
-This server provides **~34 tools** across 4 USPTO data sources for:
+This server provides **34 tools** across 4 USPTO data sources for:
 
 1. **Patent Search** - Full-text search of granted patents and published applications via PPUBS
 2. **Full Text Documents** - Get complete text of patents including claims, description, and specification
@@ -48,7 +50,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/riemannzeta/patent_mcp_server
+   git clone https://github.com/matt-wortman/patent_mcp_server
    cd patent_mcp_server
    ```
 
@@ -102,6 +104,13 @@ RETRY_MAX_WAIT=10     # Maximum wait time between retries (seconds)
 # Session Management
 SESSION_EXPIRY_MINUTES=30  # How long to cache ppubs sessions
 ENABLE_CACHING=true        # Enable/disable session caching
+
+# Response Size Management (for LLM context windows)
+MAX_RESPONSE_TOKENS=8000        # Oversized responses are saved to disk instead
+TRUNCATE_LARGE_RESPONSES=true
+
+# Downloads (PDFs and oversized JSON responses)
+PATENT_MCP_DOWNLOAD_DIR=/tmp/patent_docs  # Default: <system temp dir>/patent_docs
 
 # API Endpoints (usually don't need to change)
 PPUBS_BASE_URL=https://ppubs.uspto.gov
@@ -176,6 +185,7 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 | `odp_get_foreign_priority` | Get foreign priority claims |
 | `odp_get_transactions` | Get prosecution transaction history |
 | `odp_get_documents` | Get file wrapper documents |
+| `odp_download_document` | Download a file wrapper document (PDF) to disk |
 | `odp_search_datasets` | Search bulk data products |
 | `odp_get_dataset` | Get dataset product details |
 
@@ -203,16 +213,19 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 ### Resources and Prompts
 
 The server also provides **MCP Resources** (accessible via @ mentions):
+- `patents://cpc` - CPC classification section list
 - `patents://cpc/{code}` - CPC classification information
 - `patents://status-codes` - USPTO status code definitions
+- `patents://status-codes/{code}` - Single status code lookup
 - `patents://sources` - Data source information
+- `patents://sources/{source}` - Details for one data source
 - `patents://search-syntax` - Query syntax guide
 
 And **MCP Prompts** (workflow templates):
 - `prior_art_search` - Comprehensive prior art search guide
-- `patent_validity` - Patent validity analysis workflow
-- `competitor_portfolio` - Competitor portfolio analysis
-- `ptab_research` - PTAB proceeding research guide
+- `patent_validity_analysis` - Patent validity analysis workflow
+- `competitor_portfolio_analysis` - Competitor portfolio analysis
+- `ptab_proceeding_research` - PTAB proceeding research guide
 - `freedom_to_operate` - FTO analysis workflow
 - `patent_landscape` - Technology landscape mapping
 
@@ -221,16 +234,19 @@ And **MCP Prompts** (workflow templates):
 The project includes comprehensive test suites:
 
 ```bash
-# Run unit tests (default - skips integration tests)
+# Run unit tests (default - skips integration and smoke tests)
 uv run pytest
 
 # Run with verbose output
 uv run pytest -v
 
+# Run live smoke tests (real USPTO endpoints; requires USPTO_API_KEY)
+uv run pytest -m smoke
+
 # Run integration tests (requires network access)
 uv run pytest -m integration
 
-# Run all tests including integration
+# Run all tests including integration and smoke
 uv run pytest -m ""
 
 # Run with coverage report
