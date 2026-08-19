@@ -1,0 +1,60 @@
+name: USPTO API drift check
+
+# Weekly check of USPTO's published API catalog (data.uspto.gov Swagger
+# definitions) against scripts/uspto_api_baseline.json. When USPTO adds or
+# removes APIs/endpoints, this opens (or updates) a GitHub issue with the
+# drift report — that issue is the trigger to bring the server back to
+# parity. See scripts/check_uspto_api_coverage.py for the procedure.
+
+on:
+  schedule:
+    - cron: "17 9 * * 1" # Mondays 09:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v10.0.0
+
+      - name: Check USPTO catalog against baseline
+        id: drift
+        run: |
+          set +e
+          uv run python scripts/check_uspto_api_coverage.py > drift-report.txt 2>&1
+          code=$?
+          cat drift-report.txt
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # exit 1 = the check itself failed (network/parse) -> fail the job
+          # exit 0 = no drift, exit 2 = drift (handled by the next step)
+          if [ "$code" -eq 1 ]; then exit 1; fi
+
+      - name: Open or update the drift issue
+        if: steps.drift.outputs.exit_code == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="USPTO API catalog drift detected"
+          {
+            echo "The weekly check found changes in USPTO's published API catalog:"
+            echo
+            echo '```'
+            cat drift-report.txt
+            echo '```'
+            echo
+            echo "Procedure: wrap new endpoints as tools / delete tools for removed ones,"
+            echo "live-verify, add smoke tests, bump the version, then run"
+            echo '`python scripts/check_uspto_api_coverage.py --update-baseline`.'
+          } > issue-body.md
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue-body.md
+          else
+            gh issue create --title "$title" --body-file issue-body.md
+          fi

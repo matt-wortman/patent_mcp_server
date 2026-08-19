@@ -1,0 +1,104 @@
+{
+  "Open Data Portal API": {
+    "url": "https://data.uspto.gov/swagger/swagger.yaml",
+    "paths": [
+      "/api/v1/datasets/products/files/{productIdentifier}/{fileName}",
+      "/api/v1/datasets/products/search",
+      "/api/v1/datasets/products/{productIdentifier}",
+      "/api/v1/patent/appeals/decisions/search",
+      "/api/v1/patent/appeals/decisions/search/download",
+      "/api/v1/patent/appeals/decisions/{documentIdentifier}",
+      "/api/v1/patent/appeals/{appealNumber}/decisions",
+      "/api/v1/patent/applications/search",
+      "/api/v1/patent/applications/search/download",
+      "/api/v1/patent/applications/text-to-search",
+      "/api/v1/patent/applications/{applicationNumberText}",
+      "/api/v1/patent/applications/{applicationNumberText}/adjustment",
+      "/api/v1/patent/applications/{applicationNumberText}/assignment",
+      "/api/v1/patent/applications/{applicationNumberText}/associated-documents",
+      "/api/v1/patent/applications/{applicationNumberText}/attorney",
+      "/api/v1/patent/applications/{applicationNumberText}/continuity",
+      "/api/v1/patent/applications/{applicationNumberText}/documents",
+      "/api/v1/patent/applications/{applicationNumberText}/foreign-priority",
+      "/api/v1/patent/applications/{applicationNumberText}/meta-data",
+      "/api/v1/patent/applications/{applicationNumberText}/transactions",
+      "/api/v1/patent/interferences/decisions/search",
+      "/api/v1/patent/interferences/decisions/search/download",
+      "/api/v1/patent/interferences/decisions/{documentIdentifier}",
+      "/api/v1/patent/interferences/{interferenceNumber}/decisions",
+      "/api/v1/patent/status-codes",
+      "/api/v1/patent/trials/decisions/search",
+      "/api/v1/patent/trials/decisions/search/download",
+      "/api/v1/patent/trials/decisions/{documentIdentifier}",
+      "/api/v1/patent/trials/documents/search",
+      "/api/v1/patent/trials/documents/search/download",
+      "/api/v1/patent/trials/documents/{documentIdentifier}",
+      "/api/v1/patent/trials/proceedings/search",
+      "/api/v1/patent/trials/proceedings/search/download",
+      "/api/v1/patent/trials/proceedings/{trialNumber}",
+      "/api/v1/patent/trials/{trialNumber}/decisions",
+      "/api/v1/patent/trials/{trialNumber}/documents",
+      "/api/v1/petition/decisions/search",
+      "/api/v1/petition/decisions/search/download",
+      "/api/v1/petition/decisions/{petitionDecisionRecordIdentifier}"
+    ]
+  },
+  "TSDR API": {
+    "url": "https://data.uspto.gov/swagger/tsdr-swagger.yaml",
+    "paths": [
+      "/last-update/info.json",
+      "/last-update/info.xml",
+      "/ts/cd/caseMultiStatus/{type}",
+      "/ts/cd/casedoc/{caseid}/{docid}/content.pdf",
+      "/ts/cd/casedoc/{caseid}/{docid}/content.zip",
+      "/ts/cd/casedoc/{caseid}/{docid}/download.pdf",
+      "/ts/cd/casedoc/{caseid}/{docid}/download.zip",
+      "/ts/cd/casedoc/{caseid}/{docid}/info",
+      "/ts/cd/casedoc/{caseid}/{docid}/{pageid}/media",
+      "/ts/cd/casedocs/bundle.pdf",
+      "/ts/cd/casedocs/bundle.xml",
+      "/ts/cd/casedocs/bundle.zip",
+      "/ts/cd/casedocs/{caseid}/bundle",
+      "/ts/cd/casedocs/{caseid}/content.pdf",
+      "/ts/cd/casedocs/{caseid}/content.zip",
+      "/ts/cd/casedocs/{caseid}/download.pdf",
+      "/ts/cd/casedocs/{caseid}/download.zip",
+      "/ts/cd/casedocs/{caseid}/info",
+      "/ts/cd/casestatus/{caseid}/content.html",
+      "/ts/cd/casestatus/{caseid}/content.pdf",
+      "/ts/cd/casestatus/{caseid}/content.zip",
+      "/ts/cd/casestatus/{caseid}/download.pdf",
+      "/ts/cd/casestatus/{caseid}/download.zip",
+      "/ts/cd/casestatus/{caseid}/info",
+      "/ts/cd/casestatus/{caseid}/v1/info"
+    ]
+  },
+  "USPTO Enriched Citation API v3": {
+    "url": "https://data.uspto.gov/swagger/oa-enriched-citations.yaml",
+    "paths": [
+      "/api/v1/patent/oa/enriched_cited_reference_metadata/v3/fields",
+      "/api/v1/patent/oa/enriched_cited_reference_metadata/v3/records"
+    ]
+  },
+  "USPTO Office Action Citations API": {
+    "url": "https://data.uspto.gov/swagger/oa-citations.yaml",
+    "paths": [
+      "/api/v1/patent/oa/oa_citations/v2/fields",
+      "/api/v1/patent/oa/oa_citations/v2/records"
+    ]
+  },
+  "USPTO Office Action Rejection API": {
+    "url": "https://data.uspto.gov/swagger/oa-rejections.yaml",
+    "paths": [
+      "/api/v1/patent/oa/oa_rejections/v2/fields",
+      "/api/v1/patent/oa/oa_rejections/v2/records"
+    ]
+  },
+  "USPTO Office Action Text Retrieval API": {
+    "url": "https://data.uspto.gov/swagger/oa-text-retrieval.yaml",
+    "paths": [
+      "/api/v1/patent/oa/oa_actions/v1/fields",
+      "/api/v1/patent/oa/oa_actions/v1/records"
+    ]
+  }
+}

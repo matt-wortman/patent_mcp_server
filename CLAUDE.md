@@ -153,6 +153,20 @@ See `config.py` for all options.
 3. Update tests to match new signature
 4. Run all tests before committing
 
+### Staying at Parity with USPTO's API Catalog
+
+USPTO's published catalog (six OpenAPI definitions at data.uspto.gov/swagger)
+is snapshotted in `scripts/uspto_api_baseline.json`. To check for drift:
+
+```bash
+uv run python scripts/check_uspto_api_coverage.py   # exit 2 = drift found
+```
+
+A weekly GitHub Action (`.github/workflows/uspto-api-drift.yml`) runs this
+and opens a "USPTO API catalog drift detected" issue when USPTO adds or
+removes APIs/endpoints. After bringing the server back to parity, refresh
+the snapshot with `--update-baseline` and commit it.
+
 ### Running the Server Locally
 
 ```bash
