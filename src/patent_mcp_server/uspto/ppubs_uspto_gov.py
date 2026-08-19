@@ -5,7 +5,7 @@ This module provides tools for accessing the USPTO Public Search API at ppubs.us
 which provides full text patent documents, patent PDFs, and advanced search capabilities.
 """
 
-import os
+import copy
 import json
 import asyncio
 from typing import Any, Optional, Dict, List, Union
@@ -13,16 +13,11 @@ from datetime import datetime, timedelta
 import httpx
 import logging
 from pathlib import Path
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    RetryError
-)
 
-from patent_mcp_server.util.logging import LoggingTransport
 from patent_mcp_server.util.errors import ApiError
+from patent_mcp_server.util.http import (
+    make_logged_client, rate_limit_delay, rate_limit_error, uspto_retry
+)
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import (
     Sources, Fields, PrintStatus, HTTPMethods, Defaults
@@ -52,21 +47,10 @@ class PpubsClient:
             "Priority": "u=1, i",
         }
 
-        # Create a custom transport that logs all requests and responses
-        transport = httpx.AsyncHTTPTransport()
-        logging_transport = LoggingTransport(transport)
-
-        self.client = httpx.AsyncClient(
-            headers=self.headers,
-            http2=True,
-            follow_redirects=True,
-            transport=logging_transport,
-            timeout=config.REQUEST_TIMEOUT,
-        )
+        self.client = make_logged_client(self.headers)
         self.session = dict()
-        self.case_id = None
-        self.access_token = None
-        self.search_query = None
+        self.case_id: Optional[str] = None
+        self.access_token: Optional[str] = None
 
         # Session caching
         self.session_expires_at: Optional[datetime] = None
@@ -82,7 +66,7 @@ class PpubsClient:
         script_dir = Path(__file__).parent.parent
         search_query_path = script_dir / "json" / "search_query.json"
         with open(search_query_path, 'r') as f:
-            self.search_query = json.load(f)
+            self.search_query: Dict[str, Any] = json.load(f)
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -97,15 +81,6 @@ class PpubsClient:
         if not (config.ENABLE_CACHING and self.session_expires_at):
             return False
         return datetime.now() < self.session_expires_at
-
-    def _auth_headers(self) -> Dict[str, str]:
-        """Session headers for a single request.
-
-        The token is attached per request rather than stored on the shared
-        client's default headers, so a session refresh cannot retroactively
-        change the credentials of a request that is already in flight.
-        """
-        return {"X-Access-Token": self.access_token} if self.access_token else {}
 
     async def get_session(self) -> Optional[Dict[str, Any]]:
         """Establish a session with USPTO Public Search.
@@ -200,16 +175,7 @@ class PpubsClient:
         merged["headers"] = headers
         return merged
 
-    @retry(
-        stop=stop_after_attempt(config.MAX_RETRIES),
-        wait=wait_exponential(
-            multiplier=config.RETRY_DELAY,
-            min=config.RETRY_MIN_WAIT,
-            max=config.RETRY_MAX_WAIT
-        ),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-        reraise=True
-    )
+    @uspto_retry
     async def make_request(self, method: str, url: str, **kwargs) -> Union[httpx.Response, Dict[str, Any]]:
         """Make a request with automatic retry for session expiration and network errors.
 
@@ -237,22 +203,24 @@ class PpubsClient:
                     method, url, **self._with_auth(kwargs, self.access_token)
                 )
 
-            # Handle rate limiting
-            if response.status_code == 429:
-                wait_time = int(
-                    response.headers.get(
-                        "x-rate-limit-retry-after-seconds",
-                        Defaults.RATE_LIMIT_RETRY_DELAY
-                    )
-                ) + 1
-                logger.info(f"Rate limited, waiting {wait_time} seconds")
-                await asyncio.sleep(wait_time)
+            # Handle rate limiting (same policy as the shared helper)
+            attempt = 0
+            while response.status_code == 429:
+                if attempt >= config.MAX_RETRIES:
+                    logger.error(f"Rate limit (429) persisted after {config.MAX_RETRIES} retries: {url}")
+                    return rate_limit_error()
+                delay = rate_limit_delay(response, attempt)
+                logger.warning(f"Rate limited (429) on {url}; retrying in {delay:.0f}s")
+                await asyncio.sleep(delay)
+                attempt += 1
                 response = await self.client.request(
                     method, url, **self._with_auth(kwargs, self.access_token)
                 )
 
-            # Log response body for debugging
-            logger.debug(f"Response body for {method} {url}: {response.text}")
+            # Log response body for debugging (guarded: .text decodes the
+            # whole body, so only pay for it when DEBUG is actually on)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Response body for {method} {url}: {response.text}")
 
             return response
 
@@ -263,15 +231,28 @@ class PpubsClient:
             logger.error(f"Request error: {str(e)}")
             return ApiError.from_exception(e, f"Request to {url} failed")
 
-    async def _ensure_case_id(self) -> Optional[str]:
+    async def _ensure_case_id(self) -> Union[str, Dict[str, Any]]:
         """Return the case id of the current session, establishing one if needed.
 
         Callers should use the returned value rather than re-reading
         ``self.case_id``, so that a concurrent refresh cannot swap the case id
         out from under a request that is mid-assembly.
+
+        Returns:
+            The case id string, or an ApiError dict when a session could not
+            be established (so callers never send ``caseId: null`` upstream).
         """
         if self.case_id is None:
             await self.get_session()
+        if self.case_id is None:
+            return ApiError.create(
+                message=(
+                    "Could not establish a session with USPTO Public Search — "
+                    "the upstream session service may be down. Try again shortly."
+                ),
+                status_code=503,
+                error_code="SESSION_ERROR",
+            )
         return self.case_id
 
     async def run_query(
@@ -281,7 +262,7 @@ class PpubsClient:
         limit: int = Defaults.SEARCH_LIMIT,
         sort: str = "date_publ desc",
         default_operator: str = "OR",
-        sources: List[str] = None,
+        sources: Optional[List[str]] = None,
         expand_plurals: bool = True,
         british_equivalents: bool = True,
     ) -> Dict[str, Any]:
@@ -306,11 +287,15 @@ class PpubsClient:
 
         # Ensure we have a session
         case_id = await self._ensure_case_id()
+        if isinstance(case_id, dict):
+            return case_id
 
         logger.info(f"Running query: {query}")
 
-        # Prepare query data
-        data = self.search_query.copy()
+        # Prepare query data. Deep copy: the template holds nested dicts, and
+        # a shallow copy would let concurrent queries overwrite each other's
+        # nested "query" fields (and permanently mutate the shared template).
+        data = copy.deepcopy(self.search_query)
         data["start"] = start
         data["pageCount"] = min(limit, Defaults.SEARCH_LIMIT_MAX)
         data["sort"] = sort
@@ -330,7 +315,8 @@ class PpubsClient:
         counts_url = f"{config.PPUBS_BASE_URL}/api/searches/counts"
         counts_response = await self.make_request(HTTPMethods.POST, counts_url, json=data["query"])
 
-        if isinstance(counts_response, dict) and counts_response.get(Fields.ERROR, False):
+        # make_request returns a dict only for errors
+        if isinstance(counts_response, dict):
             return counts_response
 
         # Execute search
@@ -338,13 +324,13 @@ class PpubsClient:
         search_url = f"{config.PPUBS_BASE_URL}/api/searches/searchWithBeFamily"
         search_response = await self.make_request(HTTPMethods.POST, search_url, json=data)
 
-        if isinstance(search_response, dict) and search_response.get(Fields.ERROR, False):
+        if isinstance(search_response, dict):
             return search_response
 
         # Process response
         if search_response.status_code != 200:
             return ApiError.create(
-                message=search_response.text,
+                message=search_response.text[:1000],
                 status_code=search_response.status_code
             )
 
@@ -358,8 +344,10 @@ class PpubsClient:
                 error_code=error_obj.get(Fields.ERROR_CODE)
             )
 
-        # Log search results for debugging
-        logger.debug(f"Search results: {json.dumps(result, indent=2, default=str)}")
+        # Log search results for debugging (guarded: serializing the full
+        # result is expensive, so only pay for it when DEBUG is actually on)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Search results: {json.dumps(result, indent=2, default=str)}")
 
         return result
 
@@ -374,7 +362,9 @@ class PpubsClient:
             Dictionary containing document data or error
         """
         # Ensure we have a session
-        await self._ensure_case_id()
+        case_id = await self._ensure_case_id()
+        if isinstance(case_id, dict):
+            return case_id
 
         logger.info(f"Getting document: {guid}")
 
@@ -388,18 +378,19 @@ class PpubsClient:
 
         response = await self.make_request(HTTPMethods.GET, url, params=params)
 
-        if isinstance(response, dict) and response.get(Fields.ERROR, False):
+        if isinstance(response, dict):
             return response
 
         if response.status_code != 200:
             return ApiError.create(
-                message=response.text,
+                message=response.text[:1000],
                 status_code=response.status_code
             )
 
-        # Log document data for debugging
+        # Log document data for debugging (guarded, as in run_query)
         document_data = response.json()
-        logger.debug(f"Document data: {json.dumps(document_data, indent=2, default=str)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Document data: {json.dumps(document_data, indent=2, default=str)}")
 
         return document_data
 
@@ -423,6 +414,8 @@ class PpubsClient:
         """
         # Ensure we have a session
         case_id = await self._ensure_case_id()
+        if isinstance(case_id, dict):
+            return case_id
 
         logger.info(f"Requesting PDF save for: {guid}")
 
@@ -431,7 +424,8 @@ class PpubsClient:
             for i in range(1, page_count + 1)
         ]
 
-        response = await self.client.post(
+        response = await self.make_request(
+            HTTPMethods.POST,
             f"{config.PPUBS_BASE_URL}/api/print/imageviewer",
             json={
                 "caseId": case_id,
@@ -440,13 +434,15 @@ class PpubsClient:
                 "saveOrPrint": "save",
                 "source": document_type,
             },
-            headers=self._auth_headers(),
         )
 
-        if response.status_code == 500:
+        if isinstance(response, dict):
+            return response
+
+        if response.status_code != 200:
             return ApiError.create(
-                message=response.text,
-                status_code=500
+                message=response.text[:1000],
+                status_code=response.status_code
             )
 
         return response.text  # This is the print job ID
@@ -470,52 +466,69 @@ class PpubsClient:
             Dictionary with raw PDF bytes under "content" on success, or an
             error dict on failure. Shape mirrors api_uspto_gov.download_file().
         """
-        # Ensure we have a session
-        await self._ensure_case_id()
-
         logger.info(f"Downloading document images for: {guid}")
 
         try:
-            # Request the document save
+            # Request the document save (establishes the session if needed)
             print_job_id = await self._request_save(guid, image_location, page_count, document_type)
 
-            if isinstance(print_job_id, dict) and print_job_id.get(Fields.ERROR, False):
+            if isinstance(print_job_id, dict):
                 return print_job_id
 
-            # Poll for completion
-            while True:
+            # Poll for completion, bounded so a stuck or failed print job
+            # cannot hang the tool call forever.
+            print_data = None
+            for _ in range(Defaults.PRINT_POLL_MAX_ATTEMPTS):
                 logger.info(f"Checking print job status: {print_job_id}")
-                response = await self.client.post(
+                response = await self.make_request(
+                    HTTPMethods.POST,
                     f"{config.PPUBS_BASE_URL}/api/print/print-process",
                     json=[print_job_id],
-                    headers=self._auth_headers(),
                 )
+
+                if isinstance(response, dict):
+                    return response
 
                 if response.status_code != 200:
                     return ApiError.create(
-                        message=response.text,
+                        message=response.text[:1000],
                         status_code=response.status_code
                     )
 
                 print_data = response.json()
+                print_status = print_data[0]["printStatus"]
 
-                if print_data[0]["printStatus"] == PrintStatus.COMPLETED:
+                if print_status == PrintStatus.COMPLETED:
                     break
 
+                if print_status == PrintStatus.FAILED:
+                    return ApiError.create(
+                        message=f"PPUBS PDF generation failed for print job {print_job_id}",
+                        error_code="PDF_GENERATION_FAILED",
+                    )
+
                 await asyncio.sleep(Defaults.RETRY_DELAY)
+            else:
+                return ApiError.create(
+                    message=(
+                        f"PPUBS PDF generation did not complete within "
+                        f"{Defaults.PRINT_POLL_MAX_ATTEMPTS} status checks"
+                    ),
+                    error_code="PDF_GENERATION_TIMEOUT",
+                )
 
             # Get the PDF name
             pdf_name = print_data[0]["pdfName"]
 
             # Download the PDF
             logger.info(f"Downloading PDF: {pdf_name}")
-            request = self.client.build_request(
+            response = await self.make_request(
                 HTTPMethods.GET,
                 f"{config.PPUBS_BASE_URL}/api/print/save/{pdf_name}",
-                headers=self._auth_headers(),
             )
 
-            response = await self.client.send(request, stream=True)
+            if isinstance(response, dict):
+                return response
 
             if response.status_code != 200:
                 return ApiError.create(
@@ -524,7 +537,7 @@ class PpubsClient:
                 )
 
             # Return raw PDF bytes; caller decides where to save.
-            content = await response.aread()
+            content = response.content
 
             return {
                 "success": True,

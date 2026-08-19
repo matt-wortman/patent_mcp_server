@@ -19,26 +19,25 @@ import json
 import logging
 import re
 import sys
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import ValidationError
 
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import (
-    Sources, Fields, Defaults, PTABTrialTypes
+    Sources, Fields, PTABTrialTypes
 )
 from patent_mcp_server.util.errors import ApiError, is_error
 from patent_mcp_server.util.validation import validate_patent_number, validate_app_number
 from patent_mcp_server.util.response import (
-    ResponseEnvelope, check_and_truncate, estimate_tokens
+    ResponseEnvelope, check_and_truncate
 )
 from patent_mcp_server.resources import (
     get_cpc_section_info, get_cpc_subsection_info,
     get_data_source_info, get_all_data_sources,
-    get_search_syntax_guide, CPC_SECTIONS, DATA_SOURCES
+    get_search_syntax_guide, CPC_SECTIONS
 )
-from patent_mcp_server.prompts import get_prompt, list_prompts, PROMPTS
+from patent_mcp_server.prompts import get_prompt
 from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
 from patent_mcp_server.uspto.ptab_client import PTABClient
@@ -450,14 +449,28 @@ async def check_api_status() -> Dict[str, Any]:
         # when the actual /applications/* endpoints are healthy.
         "odp": f"{config.API_BASE_URL}/api/v1/patent/applications/14643719/meta-data",
         "ptab": f"{config.API_BASE_URL}/api/v1/patent/trials/proceedings/search?limit=1",
-        "dsapi": f"{config.API_BASE_URL}/api/v1/patent/oa/oa_actions/v1/fields",
+        # Probe the records endpoint the dsapi_* tools actually use (the
+        # /fields route is not part of the supported surface). The
+        # status-codes dataset is tiny, and rows=0 keeps the response small.
+        "dsapi": (
+            f"{config.API_BASE_URL}/api/v1/patent/oa/"
+            "oce_patent_examination_status_codes/v1/records"
+        ),
     }
 
     async def probe(name: str, url: str) -> tuple[str, dict]:
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(url, headers=probe_headers)
+                if name == "dsapi":
+                    # DSAPI search is a form-encoded POST, not a GET
+                    resp = await client.post(
+                        url,
+                        headers=probe_headers,
+                        data={"criteria": "*:*", "start": "0", "rows": "0"},
+                    )
+                else:
+                    resp = await client.get(url, headers=probe_headers)
             latency_ms = int((time.monotonic() - t0) * 1000)
             return name, {
                 "alive": resp.status_code < 500,
@@ -1160,7 +1173,7 @@ async def odp_search_datasets(
         offset: Starting position (default: 0)
         limit: Max results (default: 25)
     """
-    params = {"offset": offset, "limit": limit}
+    params: Dict[str, Any] = {"offset": offset, "limit": limit}
     if query:
         params["searchText"] = query
 

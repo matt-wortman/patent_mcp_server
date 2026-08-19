@@ -53,6 +53,9 @@ class Defaults:
     API_LIMIT = 25
     RETRY_DELAY = 1.0
     RATE_LIMIT_RETRY_DELAY = 5
+    # PPUBS PDF generation: max status polls (RETRY_DELAY seconds apart)
+    # before giving up on a stuck print job.
+    PRINT_POLL_MAX_ATTEMPTS = 60
 
 
 class PTABTrialTypes:

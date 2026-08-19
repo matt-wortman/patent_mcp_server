@@ -2,8 +2,8 @@
 USPTO PTAB API Client (Patent Trial and Appeal Board)
 
 This module provides access to the PTAB API v3 at api.uspto.gov for accessing
-Patent Trial and Appeal Board data including IPR, PGR, CBM proceedings,
-trial decisions, and appeal outcomes.
+Patent Trial and Appeal Board data: trial proceedings (IPR, PGR, CBM,
+derivation) and trial decisions.
 
 Note: PTAB API v3 has been migrated to the Open Data Portal (ODP).
 Requires an ODP API key obtained from https://data.uspto.gov ("My ODP").
@@ -22,12 +22,9 @@ logger = logging.getLogger('ptab_client')
 class PTABClient:
     """Client for the USPTO PTAB API v3.
 
-    Provides access to Patent Trial and Appeal Board data including:
+    Provides access to Patent Trial and Appeal Board data:
     - Trial proceedings (IPR, PGR, CBM, derivation)
     - Trial decisions (institution, final written decisions, terminations)
-    - Trial documents
-    - Appeals (ex parte)
-    - Interferences (historical pre-AIA)
     """
 
     def __init__(self):

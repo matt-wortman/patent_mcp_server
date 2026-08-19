@@ -74,7 +74,7 @@ class ApiUsptoClient:
         url: str,
         method: str = HTTPMethods.GET,
         data: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Make a request to the USPTO API with retry, 429, and error handling.
 
         Args:
@@ -98,7 +98,7 @@ class ApiUsptoClient:
             self.client,
             method,
             url,
-            json_body=data if method == HTTPMethods.POST else None,
+            json_body=data,
             context=f"Request to {url} failed",
         )
 

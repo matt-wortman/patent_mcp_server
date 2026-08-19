@@ -103,17 +103,12 @@ class DsapiClient:
         )
 
         if not result:
-            logger.warning(
+            message = (
                 f"DSAPI returned empty response for {dataset}/{version} — "
                 "endpoint may be unavailable or dataset decommissioned"
             )
-            return ApiError.create(
-                message=(
-                    f"DSAPI returned empty response for {dataset}/{version} — "
-                    "endpoint may be unavailable or dataset decommissioned"
-                ),
-                error_code="UPSTREAM_EMPTY",
-            )
+            logger.warning(message)
+            return ApiError.create(message=message, error_code="UPSTREAM_EMPTY")
         return result
 
     async def close(self):

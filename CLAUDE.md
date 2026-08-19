@@ -46,9 +46,10 @@ src/patent_mcp_server/
 ├── prompts.py              # Workflow prompt templates
 ├── resources.py            # Static resource data (CPC codes, status codes)
 ├── util/
+│   ├── http.py             # Shared HTTP plumbing: client factory, retry policy, 429 handling, error mapping
 │   ├── response.py         # Response normalization utilities
 │   ├── errors.py           # Error handling utilities
-│   ├── validation.py       # Input validation with Pydantic
+│   ├── validation.py       # Input validation (plain functions raising ValueError)
 │   └── logging.py          # Logging configuration
 └── uspto/
     ├── ppubs_uspto_gov.py  # Patent Public Search client
@@ -99,9 +100,18 @@ async def tool_name(...) -> Dict[str, Any]:
 
 ### Writing Unit Tests
 
-- Mock external HTTP calls using `unittest.mock`
+- Unit tests cover pure internal logic only (validation, error mapping,
+  response normalization, header parsing) — no network, and **no mocked
+  upstream HTTP** (see the Server Integrity Rule below)
 - Use `@pytest.mark.unit` marker
 - Test files go in `test/unit/`
+
+### Writing Live Smoke Tests
+
+- Anything that crosses the network gets a real smoke test against a stable
+  fixture (a known patent/application number)
+- Use `@pytest.mark.smoke` marker; place in `test/smoke/`
+- Requires `USPTO_API_KEY` in `.env`; skipped by default
 
 ### Writing Integration Tests
 
@@ -109,19 +119,14 @@ async def tool_name(...) -> Dict[str, Any]:
 - These tests hit real APIs and require network access
 - Place in `test/test_tools.py` or `test/test_tools_pytest.py`
 
-### Test Fixtures
-
-Common fixtures are in `test/fixtures/`:
-- `ppubs_responses.py` - Mock PPUBS API responses
-- Similar fixtures exist for other APIs
-
 ## Dependencies
 
 Managed via `pyproject.toml`. Key dependencies:
-- `mcp[cli]` - FastMCP server framework
-- `httpx` - Async HTTP client
-- `pydantic` - Data validation
+- `mcp[cli]` - FastMCP server framework (pulls in pydantic)
+- `httpx[http2]` - Async HTTP client
 - `tenacity` - Retry logic
+- `python-multipart` - not imported here; a pinned security floor for a
+  transitive dependency of mcp (CVE-2026-24486)
 
 To add a dependency:
 ```bash
@@ -163,6 +168,18 @@ uv run patent-mcp-server
 LOG_LEVEL=DEBUG uv run patent-mcp-server
 ```
 
+## Intentional Tool Overlaps
+
+Two pairs of tools overlap on purpose — all four work, and each side serves a
+different access pattern. Do not "deduplicate" them:
+
+- `get_status_code` vs `dsapi_lookup_status_code` — both hit the DSAPI
+  status-code dataset. `get_status_code` returns a compact
+  `{code, description, stage}` answer; `dsapi_lookup_status_code` returns the
+  raw DSAPI record shape.
+- `get_cpc_info` (tool) vs `patents://cpc/{code}` (resource) — same CPC data;
+  the tool is for model calls, the resource for @-mention lookups.
+
 ## Server Integrity Rule
 
 A tool in this server exists if and only if it works against the live USPTO API. When upstream dies, delete the tool and bump the version — do not deprecate, do not leave warnings, do not keep a dead wrapper "for future migration." If USPTO publishes a successor API, that's a separate migration PR.
@@ -171,6 +188,7 @@ Tests follow the same rule: pure internal logic (validation, error mapping, resp
 
 ## Version History
 
+- **v0.11.0** - Full review + hardening pass. Fixed PPUBS concurrency bug (shared search template now deep-copied per query); PDF pipeline gained retry/session-refresh/429 protection, failed-print-job detection, and a poll timeout; PPUBS adopted the shared HTTP helpers (`util/http.py`); session-bootstrap failures now return a clear SESSION_ERROR instead of sending `caseId: null` upstream; version lookup no longer crashes uninstalled checkouts; error bodies capped at 1,000 chars; restored `python-multipart` CVE floor; dropped unused direct pydantic dep; deleted dead `test/config/` helper and stale doc claims.
 - **v0.10.0** - Restored live-tools-only philosophy. Deleted dead stub wrappers for PatentsView, PTAB, Litigation, and Office Action tools that returned `API_UNAVAILABLE`. Reactivated 4 PTAB tools (`ptab_search_proceedings`, `ptab_get_proceeding`, `ptab_search_decisions`, `ptab_get_decision`) against live `api.uspto.gov` endpoints. Migrated DSAPI client from `developer.uspto.gov` to `api.uspto.gov`. Added `odp_download_document` for file wrapper PDF downloads. Added 37 live smoke tests across DSAPI, ODP, PPUBS, PTAB, and liveness probe. `check_api_status` rewritten as a real liveness probe.
 - **v0.7.0** - PatentsView removed (upstream decommissioned). Mocked-upstream tests replaced with real smoke tests against live USPTO endpoints. check_api_status rewritten as real liveness probe.
 - **v0.6.2** - DSAPI consolidation: merged enriched_citation_client, litigation_client, and office_action_client into single dsapi_client.py; documentation overhaul

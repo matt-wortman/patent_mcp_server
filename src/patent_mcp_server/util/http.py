@@ -29,6 +29,23 @@ logger = logging.getLogger('uspto_http')
 # Never sleep longer than this on a single 429, regardless of Retry-After
 MAX_RATE_LIMIT_SLEEP = 60.0
 
+# Cap error bodies copied into logs and error dicts. Upstream HTML error
+# pages can be hundreds of KB; the first KB carries the useful part.
+MAX_ERROR_BODY_CHARS = 1000
+
+# The single network-retry policy shared by every USPTO client, including
+# the PPUBS client's own make_request.
+uspto_retry = retry(
+    stop=stop_after_attempt(config.MAX_RETRIES),
+    wait=wait_exponential(
+        multiplier=config.RETRY_DELAY,
+        min=config.RETRY_MIN_WAIT,
+        max=config.RETRY_MAX_WAIT,
+    ),
+    retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
+    reraise=True,
+)
+
 
 def make_logged_client(headers: Dict[str, str]) -> httpx.AsyncClient:
     """Create the standard async HTTP client used by all USPTO API clients.
@@ -51,8 +68,8 @@ def make_logged_client(headers: Dict[str, str]) -> httpx.AsyncClient:
     )
 
 
-def _rate_limit_delay(response: httpx.Response, attempt: int) -> float:
-    """Seconds to wait before retrying a 429 response.
+def rate_limit_delay(response: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retrying a 429 response, capped at MAX_RATE_LIMIT_SLEEP.
 
     Reads Retry-After, then x-rate-limit-retry-after-seconds; falls back to
     a growing default when neither header is present or parseable.
@@ -61,22 +78,26 @@ def _rate_limit_delay(response: httpx.Response, attempt: int) -> float:
         value = response.headers.get(header)
         if value:
             try:
-                return float(value)
+                return min(float(value), MAX_RATE_LIMIT_SLEEP)
             except ValueError:
                 continue
-    return float(Defaults.RATE_LIMIT_RETRY_DELAY * (attempt + 1))
+    return min(float(Defaults.RATE_LIMIT_RETRY_DELAY * (attempt + 1)), MAX_RATE_LIMIT_SLEEP)
 
 
-@retry(
-    stop=stop_after_attempt(config.MAX_RETRIES),
-    wait=wait_exponential(
-        multiplier=config.RETRY_DELAY,
-        min=config.RETRY_MIN_WAIT,
-        max=config.RETRY_MAX_WAIT,
-    ),
-    retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-    reraise=True,
-)
+def rate_limit_error() -> Dict[str, Any]:
+    """Fresh RATE_LIMITED error dict for a 429 that survived all retries."""
+    return ApiError.create(
+        message=(
+            "USPTO rate limit reached (HTTP 429) and still active after "
+            f"{config.MAX_RETRIES} retries. Wait a minute and try again — "
+            "the API allows 60 requests/minute (4/minute for downloads)."
+        ),
+        status_code=429,
+        error_code="RATE_LIMITED",
+    )
+
+
+@uspto_retry
 async def _send(
     client: httpx.AsyncClient,
     method: str,
@@ -113,16 +134,8 @@ async def _send(
                 break
             if attempt >= config.MAX_RETRIES:
                 logger.error(f"Rate limit (429) persisted after {config.MAX_RETRIES} retries: {url}")
-                return ApiError.create(
-                    message=(
-                        "USPTO rate limit reached (HTTP 429) and still active after "
-                        f"{config.MAX_RETRIES} retries. Wait a minute and try again — "
-                        "the API allows 60 requests/minute (4/minute for downloads)."
-                    ),
-                    status_code=429,
-                    error_code="RATE_LIMITED",
-                )
-            delay = min(_rate_limit_delay(response, attempt), MAX_RATE_LIMIT_SLEEP)
+                return rate_limit_error()
+            delay = rate_limit_delay(response, attempt)
             logger.warning(f"Rate limited (429) on {url}; retrying in {delay:.0f}s")
             await asyncio.sleep(delay)
             attempt += 1
@@ -132,18 +145,19 @@ async def _send(
 
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code
-        logger.error(f"HTTP error: {status_code} - {e.response.text}")
+        body = e.response.text[:MAX_ERROR_BODY_CHARS]
+        logger.error(f"HTTP error: {status_code} - {body}")
         try:
             error_json = e.response.json()
             return ApiError.from_http_error(
                 status_code=status_code,
-                response_text=e.response.text,
+                response_text=body,
                 response_json=error_json,
             )
         except Exception:
             return ApiError.from_http_error(
                 status_code=status_code,
-                response_text=e.response.text,
+                response_text=body,
             )
 
     except (httpx.TimeoutException, httpx.NetworkError) as e:
@@ -170,6 +184,8 @@ async def request_json(
 
     Returns:
         Parsed response JSON, or an ApiError dictionary on any failure.
+        A non-dict JSON body (e.g. a top-level array) is wrapped as
+        {"results": ...} so callers can always treat the result as a dict.
     """
     result = await _send(
         client,
@@ -185,10 +201,14 @@ async def request_json(
         return result
 
     try:
-        return result.json()
+        parsed = result.json()
     except Exception as e:
         logger.error(f"Failed to parse JSON response: {str(e)}")
         return ApiError.from_exception(e, context)
+
+    if isinstance(parsed, dict):
+        return parsed
+    return {"results": parsed}
 
 
 async def request_bytes(

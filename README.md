@@ -14,7 +14,7 @@ This server provides **~34 tools** across 4 USPTO data sources for:
 2. **Full Text Documents** - Get complete text of patents including claims, description, and specification
 3. **PDF Downloads** - Download patents as PDF files (Claude Desktop doesn't support this as a client currently)
 4. **Prosecution History** - Access office actions, transactions, and file wrapper data
-5. **PTAB Proceedings** - Search and retrieve Patent Trial and Appeal Board proceedings (IPR, PGR, CBM), decisions, and appeals
+5. **PTAB Proceedings** - Search and retrieve Patent Trial and Appeal Board proceedings (IPR, PGR, CBM) and decisions
 6. **Office Actions & Rejections** - Full-text office actions with §101/102/103/112 rejection flags via DSAPI
 7. **Patent Litigation** - Search 74,000+ district court patent cases via DSAPI
 8. **Citation Analysis** - Enriched citation data, examiner/applicant provenance, and citation metrics
@@ -22,13 +22,13 @@ This server provides **~34 tools** across 4 USPTO data sources for:
 
 ## API Sources
 
-This server interacts with five USPTO patent data sources:
+This server interacts with four USPTO patent data sources:
 
 | Source | Description | Auth Required |
 |--------|-------------|---------------|
 | **ppubs.uspto.gov** | Full text documents, PDF downloads, advanced search (daily updates) | No |
 | **api.uspto.gov (ODP)** | Metadata, continuity, transactions, assignments, prosecution history | Yes (ODP API Key) |
-| **PTAB API v3 (ODP)** | IPR/PGR/CBM proceedings, decisions, appeals, interferences | Yes (ODP API Key) |
+| **PTAB API v3 (ODP)** | IPR/PGR/CBM/derivation proceedings and decisions | Yes (ODP API Key) |
 | **DSAPI (api.uspto.gov)** | Office actions, enriched citations, patent litigation, status codes | Yes (ODP API Key) |
 
 ## Prerequisites
@@ -248,7 +248,18 @@ uv sync --dev
 
 ## Version History
 
-### v0.10.0 (Current)
+### v0.11.0 (Current)
+- Full-codebase review and hardening pass
+- Fixed a concurrency bug where simultaneous PPUBS searches could silently run each other's query (shared search template is now deep-copied per query)
+- PPUBS PDF downloads now detect failed print jobs and time out instead of polling forever, and the whole PDF pipeline gained retry, session-refresh, and rate-limit protection
+- PPUBS adopted the shared HTTP helpers: standard `Retry-After` support, capped sleeps, and the shared retry policy (previously it could crash on non-integer rate-limit headers)
+- Clear "could not establish a session" errors instead of sending malformed requests when USPTO session bootstrap fails
+- Server no longer crashes at startup when run from an uninstalled source checkout (version lookup now falls back gracefully)
+- Error bodies from upstream are capped at 1,000 characters in logs and tool responses
+- Restored the `python-multipart>=0.0.22` security floor (CVE-2026-24486; still a transitive dependency of mcp); dropped the unused direct pydantic dependency
+- Removed dead code and stale documentation claims (interference support, mocked-HTTP test guidance)
+
+### v0.10.0
 - Restored live-tools-only philosophy per the Server Integrity Rule
 - Deleted dead stub wrappers for PatentsView, PTAB, Litigation, and Office Action tools that previously returned `API_UNAVAILABLE`
 - Reactivated 4 PTAB tools (`ptab_search_proceedings`, `ptab_get_proceeding`, `ptab_search_decisions`, `ptab_get_decision`) against live `api.uspto.gov` endpoints

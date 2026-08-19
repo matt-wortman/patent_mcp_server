@@ -8,15 +8,20 @@ variables with sensible defaults.
 from dotenv import load_dotenv
 import os
 import tempfile
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 import logging
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Single source of truth for the package version (pyproject.toml).
-PACKAGE_VERSION: str = version("patent_mcp_server")
+# Single source of truth for the package version (pyproject.toml). Falls
+# back when running from an uninstalled source checkout (no dist-info),
+# so importing config never crashes the server just to render a version.
+try:
+    PACKAGE_VERSION: str = version("patent_mcp_server")
+except PackageNotFoundError:
+    PACKAGE_VERSION = "0.0.0+uninstalled"
 
 
 class Config:
