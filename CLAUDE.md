@@ -17,8 +17,8 @@ Before any commit:
 # Run the full test suite
 uv run pytest
 
-# Expected output: All tests should pass (integration and smoke tests are skipped by default)
-# Example: "93 passed, 57 deselected"
+# Expected output: All tests should pass (live smoke tests are skipped by default)
+# Example: "99 passed, 43 deselected"
 ```
 
 If tests fail:
@@ -28,13 +28,12 @@ If tests fail:
 
 ### Test Organization
 
-- **Unit tests** (`test/unit/`): Run by default, mock external APIs
-- **Live smoke tests** (`test/smoke/`): Real USPTO endpoints, require `USPTO_API_KEY`, skipped by default
-- **Integration tests** (`test/test_tools.py`, `test/test_patents.py`): Require network access, skipped by default
+- **Unit tests** (`test/unit/`): Run by default, pure internal logic, no network
+- **Live smoke tests** (`test/smoke/`): Real USPTO endpoints, skipped by default. PPUBS tests run without credentials; ODP, PTAB, and DSAPI tests require `USPTO_API_KEY`.
 
-To run integration tests:
+To run live smoke tests:
 ```bash
-uv run pytest -m integration
+uv run pytest -m smoke
 ```
 
 ## Project Structure
@@ -112,13 +111,8 @@ async def tool_name(...) -> Dict[str, Any]:
 - Anything that crosses the network gets a real smoke test against a stable
   fixture (a known patent/application number)
 - Use `@pytest.mark.smoke` marker; place in `test/smoke/`
-- Requires `USPTO_API_KEY` in `.env`; skipped by default
-
-### Writing Integration Tests
-
-- Use `@pytest.mark.integration` marker
-- These tests hit real APIs and require network access
-- Place in `test/test_tools.py` or `test/test_patents.py`
+- Skipped by default; ODP/PTAB/DSAPI modules skip themselves when
+  `USPTO_API_KEY` is not set, PPUBS runs without credentials
 
 ## Dependencies
 

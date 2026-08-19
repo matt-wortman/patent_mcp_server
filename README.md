@@ -234,26 +234,22 @@ And **MCP Prompts** (workflow templates):
 The project includes comprehensive test suites:
 
 ```bash
-# Run unit tests (default - skips integration and smoke tests)
+# Run unit tests (default - skips live smoke tests)
 uv run pytest
 
 # Run with verbose output
 uv run pytest -v
 
-# Run live smoke tests (real USPTO endpoints; requires USPTO_API_KEY)
+# Run live smoke tests (real USPTO endpoints; PPUBS runs without
+# credentials, ODP/PTAB/DSAPI require USPTO_API_KEY)
 uv run pytest -m smoke
 
-# Run integration tests (requires network access)
-uv run pytest -m integration
-
-# Run all tests including integration and smoke
+# Run all tests including smoke
 uv run pytest -m ""
 
 # Run with coverage report
 uv run pytest --cov=patent_mcp_server
 ```
-
-Test results are stored in `/test/test_results/`.
 
 ### Development
 

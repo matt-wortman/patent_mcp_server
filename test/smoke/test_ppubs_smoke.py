@@ -3,18 +3,17 @@ Smoke tests for ppubs.uspto.gov tools.
 
 These tests make real HTTP calls to live USPTO endpoints.
 Run with: uv run pytest -m smoke
-Skip if USPTO_API_KEY is not set.
+
+PPUBS is unauthenticated — no USPTO_API_KEY gate here, so this module
+runs in environments that have no key (unlike ODP/PTAB/DSAPI smoke tests).
 """
 
-import os
 import pytest
-
-if not os.getenv("USPTO_API_KEY"):
-    pytest.skip("USPTO_API_KEY not set — skipping smoke tests", allow_module_level=True)
 
 from patent_mcp_server.patents import (
     ppubs_search_patents,
     ppubs_search_applications,
+    ppubs_get_full_document,
     ppubs_get_patent_by_number,
     ppubs_download_patent_pdf,
 )
@@ -43,6 +42,23 @@ async def test_ppubs_get_patent_by_number_returns_document():
     result = await ppubs_get_patent_by_number("10000000")
 
     # The tool returns the raw document dict, not a ResponseEnvelope — no "success" key.
+    assert not result.get("error"), f"Expected no error, got: {result}"
+    title = result.get("inventionTitle")
+    assert isinstance(title, str) and len(title) > 0, (
+        f"Expected non-empty inventionTitle string, got: {title!r}"
+    )
+
+
+async def test_ppubs_get_full_document_by_guid_returns_document():
+    """ppubs_get_full_document fetches a document from a GUID found via search."""
+    search = await ppubs_search_patents('"10000000".pn.', limit=1)
+    assert search.get("success") is True, f"Expected search success, got: {search}"
+    hit = search["results"][0]
+    guid = hit.get("guid")
+    source_type = hit.get("type")
+    assert guid and source_type, f"Search hit missing guid/type: {hit}"
+
+    result = await ppubs_get_full_document(guid, source_type)
     assert not result.get("error"), f"Expected no error, got: {result}"
     title = result.get("inventionTitle")
     assert isinstance(title, str) and len(title) > 0, (
