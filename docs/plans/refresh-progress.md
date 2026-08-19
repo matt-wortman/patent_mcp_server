@@ -87,6 +87,53 @@ search, application search, full document, and PDF download all live through the
 new lock/per-request-token code path. `config.USER_AGENT` verified to render
 `patent-mcp-server/0.10.0` from package metadata.
 
+### Session 4 — Fable 5 code review + release (completed 2026-08-19, branch `uspto-refresh`)
+
+- `4d0e4e2` — v0.11.0: review fixes + release (tag `v0.11.0`).
+  Review ran as 8 parallel finder angles (line-by-line, removed-behavior audit,
+  cross-file tracer, reuse, simplification, efficiency, altitude, conventions)
+  plus a manual pass over patents.py; 23 verified findings filed. Fixes:
+  - **PPUBS concurrency bug**: `run_query` deep-copies the search template
+    (shallow `.copy()` shared the nested `query` dict between concurrent
+    searches — one search could silently run another's query).
+  - **PPUBS PDF pipeline**: all three raw HTTP calls now go through
+    `make_request` (retry + 403 refresh + 429); FAILED print jobs detected;
+    poll loop bounded by `Defaults.PRINT_POLL_MAX_ATTEMPTS` (60 × 1s);
+    `_auth_headers()` removed (make_request injects the token).
+  - **PPUBS 429**: shares `util/http.rate_limit_delay` + `rate_limit_error`
+    (honors Retry-After, float parse, MAX_RETRIES attempts, 60s cap) and the
+    exported `uspto_retry` tenacity policy; client built via
+    `make_logged_client` — PPUBS now fully on the shared helpers.
+  - `_ensure_case_id` returns a SESSION_ERROR ApiError when session bootstrap
+    fails (callers no longer send `caseId: null` upstream).
+  - `config.PACKAGE_VERSION` wrapped in try/except PackageNotFoundError →
+    "0.0.0+uninstalled" fallback (was an import-time crash for uninstalled
+    checkouts).
+  - `check_api_status` DSAPI probe now form-POSTs the status-codes *records*
+    endpoint the tools actually use (the old /fields probe route is not part
+    of the supported surface).
+  - `request_json` wraps non-dict JSON as `{"results": ...}` (top-level array
+    would have crashed `is_error`).
+  - Error bodies capped at 1,000 chars in logs and error dicts
+    (`MAX_ERROR_BODY_CHARS`); debug body dumps guarded by `isEnabledFor`
+    (f-strings were decoding every response body at any log level).
+  - Dead code: pydantic/os/RetryError and several patents.py imports removed;
+    `test/config/` deleted (zero users); tautological cap test replaced with
+    real clamp tests (cap now lives inside `rate_limit_delay`).
+  - Packaging: **python-multipart>=0.0.22 floor restored** — Session 1's
+    "not in the transitive tree" note was WRONG (mcp 1.23.1 requires it);
+    unused direct pydantic dep dropped; version 0.11.0.
+  - Docs: README (four sources, no interferences/appeals, v0.11.0 history),
+    CLAUDE.md (util/http.py in map, plain-function validation, smoke-test
+    guidance replacing the mocked-HTTP instruction, intentional tool
+    overlaps documented, v0.11.0 history).
+
+Exit gate: `uv run pytest` → **93 passed, 57 deselected**; full smoke
+`uv run pytest test/smoke/ -m smoke` → **37 passed** (21s, includes live PDF
+download through the new make_request path); MCP stdio E2E (fresh server,
+34 tools listed, one tool per backend + liveness probe, all four backends
+HTTP 200) → **PASS**. Tagged `v0.11.0`.
+
 ## Reference — upstream PPUBS field codes (recorded per plan; do NOT adopt)
 
 Ours (verified working live 2026-08-19): `.ttl.` `.abst.` `.aclm.` `.isd.` `.an.`
@@ -150,23 +197,42 @@ deeper debugging. No code change now (plan guardrail: no speculative rewrite).
   falsely reports `util.http` unresolved (stale IDE env — tests import it fine).
   Session 4's review should consider the real ones; ignore the import ghost.
 
+## Known limitations (reviewed Session 4; deliberately NOT fixed)
+
+- **403-refresh retry re-sends the original body** — after a session refresh,
+  the retried request's JSON body still carries the dead session's `caseId`.
+  Fixing generically requires re-invoking the caller; disproportionate for a
+  30-minute session-expiry window. If PPUBS searches ever fail specifically
+  right after "Session expired, refreshing" log lines, this is why.
+- **Cookie-jar reset race** — `_establish_session` resets the shared cookie
+  jar while other requests may be in flight; a late response can write stale
+  cookies into the fresh jar. Narrow window; full fix needs per-request
+  cookie isolation. Accepted residual risk (upstream's design too).
+- **429 wait budget vs client timeouts** — a tool call can sleep up to
+  60s × MAX_RETRIES on persistent 429s (plan's chosen design). MCP clients
+  with short per-call timeouts may give up first; the server still returns a
+  clean RATE_LIMITED error when it exhausts retries.
+- `test/test_patents.py` Pyright possibly-unbound warnings — manual-script
+  heritage, integration-skipped, harmless.
+
 ## Next session's tasks verbatim
 
-### Session 4 — Fable 5 code review + release (est. 80–120K tokens)
+Sessions 1–4 are COMPLETE; v0.11.0 is tagged on `uspto-refresh`. Remaining:
 
-1. Full review of the now-smaller src/ (~2,300 lines) and test/: error paths, tool-boundary
-   validation, docstring accuracy (docstrings ARE the MCP tool descriptions — fix falsehoods,
-   don't gut them), log hygiene, async correctness. Use the `/code-review` skill at high effort
-   plus a manual pass over patents.py.
-2. Document (not remove) the tool-naming overlaps.
-3. Fix findings; update CLAUDE.md/README version history; bump to v0.11.0; tag.
-4. Exit: pytest green + FULL live smoke pass → commit + tag.
+1. **Merge to `main`** (plan: "merge to main after Session 4's release gate").
+   The release gate passed; merge is ready when the user wants it.
+2. **Session 5 (optional, per plan)**:
+   - Live-probe first-party `GET /api/v1/patent/status-codes` (unverified, from
+     a third-party client); if real, consider replacing the 2018-vintage
+     `oce_patent_examination_status_codes` dataset behind the existing tools.
+   - Add a PTAB document-download tool using `fileDownloadURI`
+     (`api.uspto.gov/api/v1/patent/ptab-files/...`), routed through the shared
+     429 handler (downloads limited to 4 req/min).
+   - Each item independently skippable. Exit: pytest + new smoke tests green → commit.
+3. Possible future cycle (recorded S3): upstream branches
+   `fix/ppubs-live-api-drift` and `feature/federal-litigation-documents`.
 
-Carry-over review candidates for Session 4 (recorded in earlier sessions):
-
-- `test/config/` — `TestConfig` + `test_data.json` have no callers outside their own file.
-- Whether PPUBS should adopt `util/http.py` helpers (post-port decision, see S3 note).
-- Pre-existing Pyright warnings (S3 surprise note above); `test/test_patents.py`
-  possibly-unbound warnings (S1 note — integration-skipped manual-script heritage).
-- Session 4 end gate: full smoke suite (all 37+) + liveness probe + restart the MCP
-  server and exercise one tool per backend through MCP (plan "Verification" section).
+Note for future sessions: there is no `.env` in the repo — `USPTO_API_KEY`
+lives in the user's shell environment. MCP clients spawning the server get a
+sanitized env, so their config must set the key explicitly (the user's
+existing client config evidently does; smoke tests inherit the shell env).
