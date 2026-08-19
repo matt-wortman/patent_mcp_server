@@ -5,22 +5,18 @@ This module provides a generic client for accessing the USPTO DSAPI datasets
 after their April 20, 2026 migration from developer.uspto.gov/ds-api to the
 Open Data Portal at api.uspto.gov. All datasets share a uniform interface:
 
-- Fields: GET /api/v1/patent/oa/{dataset}/{version}/fields
 - Search: POST /api/v1/patent/oa/{dataset}/{version}/records (form-encoded)
 
 Authentication: requires X-API-KEY header (USPTO_API_KEY, same key used by
 the odp_* tools).
 
-Office Action datasets (confirmed migrated to api.uspto.gov):
+Datasets (all confirmed live on api.uspto.gov, verified 2026-08-19):
 - oa_actions/v1 — Office action full text
 - oa_citations/v2 — Office action citations
 - oa_rejections/v2 — Office action rejections
 - enriched_cited_reference_metadata/v3 — Enriched cited reference metadata
-
-Legacy datasets (migration status uncertain as of April 2026):
-- oce_patent_litigation_cases/v1 — may 404 on new base URL
-- oce_patent_examination_status_codes/v1 — may be covered by
-  /api/v1/patent/status-codes on ODP
+- oce_patent_litigation_cases/v1 — Patent litigation cases
+- oce_patent_examination_status_codes/v1 — Examination status codes
 """
 
 from typing import Any, Dict

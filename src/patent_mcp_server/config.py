@@ -8,11 +8,15 @@ variables with sensible defaults.
 from dotenv import load_dotenv
 import os
 import tempfile
+from importlib.metadata import version
 from typing import Optional
 import logging
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Single source of truth for the package version (pyproject.toml).
+PACKAGE_VERSION: str = version("patent_mcp_server")
 
 
 class Config:
@@ -29,7 +33,7 @@ class Config:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # HTTP Settings
-    USER_AGENT: str = os.getenv("USER_AGENT", "patent-mcp-server/0.7.0")
+    USER_AGENT: str = os.getenv("USER_AGENT", f"patent-mcp-server/{PACKAGE_VERSION}")
     REQUEST_TIMEOUT: float = float(os.getenv("REQUEST_TIMEOUT", "30.0"))
 
     # Rate Limiting & Retry

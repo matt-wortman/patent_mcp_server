@@ -11,7 +11,8 @@ with multiple USPTO patent data APIs:
 
 The server uses stdio transport for Claude Code/Cursor integration.
 
-Version: 0.7.0 - Remove defunct upstream (HTTP 410); liveness probe in check_api_status
+The package version lives in pyproject.toml and is exposed at runtime as
+patent_mcp_server.config.PACKAGE_VERSION.
 """
 import atexit
 import json
