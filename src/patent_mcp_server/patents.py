@@ -28,7 +28,12 @@ from patent_mcp_server.constants import (
     Sources, Fields, PTABTrialTypes
 )
 from patent_mcp_server.util.errors import ApiError, is_error
-from patent_mcp_server.util.validation import validate_patent_number, validate_app_number
+from patent_mcp_server.util.validation import (
+    validate_patent_number,
+    validate_app_number,
+    validate_pagination,
+    validate_status_code,
+)
 from patent_mcp_server.util.response import (
     ResponseEnvelope, check_and_truncate
 )
@@ -42,6 +47,11 @@ from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
 from patent_mcp_server.uspto.ptab_client import PTABClient
 from patent_mcp_server.uspto.dsapi_client import DsapiClient
+
+# Maximum page size accepted at ODP/PTAB tool boundaries. Responses are
+# fully buffered before truncation, so the page size is what actually
+# bounds host memory (IR-05).
+MAX_PAGE_LIMIT = 100
 
 # Initialize FastMCP server
 mcp = FastMCP("uspto_patent_tools")
@@ -174,6 +184,11 @@ async def _lookup_status_code_via_dsapi(code: str) -> Dict[str, Any]:
     Returns a dict of shape ``{code, description, stage}`` on hit or an
     error dict on miss/upstream failure.
     """
+    try:
+        code = validate_status_code(code)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "code")
+
     criteria = f'appl_status_code:"{code}"'
     raw = await dsapi_client.search(
         dataset="oce_patent_examination_status_codes",
@@ -1075,11 +1090,16 @@ async def odp_search_applications(
         filing_date_from: Filing date range start (YYYY-MM-DD)
         filing_date_to: Filing date range end (YYYY-MM-DD)
         offset: Starting position (default: 0)
-        limit: Max results (default: 25)
+        limit: Max results (default: 25, max: 100)
 
     Returns:
         Normalized response with matching applications.
     """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
     body: Dict[str, Any] = {
         "pagination": {"offset": offset, "limit": limit},
     }
@@ -1175,8 +1195,13 @@ async def odp_search_datasets(
     Args:
         query: Search query for dataset names/descriptions
         offset: Starting position (default: 0)
-        limit: Max results (default: 25)
+        limit: Max results (default: 25, max: 100)
     """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
     params: Dict[str, Any] = {"offset": offset, "limit": limit}
     if query:
         params["searchText"] = query
@@ -1241,11 +1266,16 @@ async def ptab_search_proceedings(
         filing_date_to: Filing date range end (YYYY-MM-DD)
         status: Proceeding status (Pending, Instituted, Terminated, FWD Entered)
         offset: Starting position (default: 0)
-        limit: Max results (default: 25)
+        limit: Max results (default: 25, max: 100)
 
     Returns:
         Normalized response with matching proceedings.
     """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
     if trial_type and trial_type not in PTABTrialTypes.ALL:
         return ApiError.validation_error(
             f"Invalid trial type. Must be one of: {', '.join(PTABTrialTypes.ALL)}",
@@ -1307,8 +1337,13 @@ async def ptab_search_decisions(
         decision_date_from: Date range start (YYYY-MM-DD)
         decision_date_to: Date range end (YYYY-MM-DD)
         offset: Starting position (default: 0)
-        limit: Max results (default: 25)
+        limit: Max results (default: 25, max: 100)
     """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
     result = await ptab_client.search_decisions(
         query=query,
         decision_type=decision_type,
@@ -1361,18 +1396,24 @@ async def dsapi_search_enriched_citations(
 
     Args:
         patent_app_number: Patent application number (digits only, e.g., "16123456")
-        rows: Maximum results to return (default: 25)
+        rows: Maximum results to return (default: 25, max: 100)
 
     Returns:
         DSAPI response with matching enriched citation records.
     """
+    try:
+        patent_app_number = validate_app_number(patent_app_number)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "patent_app_number")
+
     criteria = f'patentApplicationNumber:"{patent_app_number}"'
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="enriched_cited_reference_metadata",
         version="v3",
         criteria=criteria,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 @mcp.tool()
@@ -1402,18 +1443,19 @@ async def dsapi_get_citation_details(
     Args:
         criteria: Lucene query string (e.g., 'citedDocumentIdentifier:"US 7,725,375*"')
         start: Pagination offset (default: 0)
-        rows: Maximum results to return (default: 25)
+        rows: Maximum results to return (default: 25, max: 100)
 
     Returns:
         DSAPI response with matching enriched citation records.
     """
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="enriched_cited_reference_metadata",
         version="v3",
         criteria=criteria,
         start=start,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 @mcp.tool()
@@ -1442,18 +1484,19 @@ async def dsapi_search_litigation(
     Args:
         criteria: Lucene query string
         start: Pagination offset (default: 0)
-        rows: Maximum results to return (default: 25)
+        rows: Maximum results to return (default: 25, max: 100)
 
     Returns:
         DSAPI response with matching litigation case records.
     """
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="oce_patent_litigation_cases",
         version="v1",
         criteria=criteria,
         start=start,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 @mcp.tool()
@@ -1477,18 +1520,24 @@ async def dsapi_get_patent_litigation(
 
     Args:
         patent_number: Patent number to search for (e.g., "7654321")
-        rows: Maximum results to return (default: 25)
+        rows: Maximum results to return (default: 25, max: 100)
 
     Returns:
         DSAPI response with matching litigation case records.
     """
+    try:
+        patent_number = validate_patent_number(patent_number)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "patent_number")
+
     criteria = f'case_name:"{patent_number}" OR case_cause:"{patent_number}"'
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="oce_patent_litigation_cases",
         version="v1",
         criteria=criteria,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 @mcp.tool()
@@ -1515,18 +1564,24 @@ async def dsapi_search_rejections(
 
     Args:
         patent_app_number: Patent application number (digits only, e.g., "16123456")
-        rows: Maximum results to return (default: 25)
+        rows: Maximum results to return (default: 25, max: 100)
 
     Returns:
         DSAPI response with rejection records for the application.
     """
+    try:
+        patent_app_number = validate_app_number(patent_app_number)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "patent_app_number")
+
     criteria = f'patentApplicationNumber:"{patent_app_number}"'
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="oa_rejections",
         version="v2",
         criteria=criteria,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 @mcp.tool()
@@ -1551,18 +1606,24 @@ async def dsapi_search_oa_citations(
 
     Args:
         patent_app_number: Patent application number (digits only, e.g., "16123456")
-        rows: Maximum results to return (default: 25)
+        rows: Maximum results to return (default: 25, max: 100)
 
     Returns:
         DSAPI response with office action citation records.
     """
+    try:
+        patent_app_number = validate_app_number(patent_app_number)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "patent_app_number")
+
     criteria = f'patentApplicationNumber:"{patent_app_number}"'
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="oa_citations",
         version="v2",
         criteria=criteria,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 @mcp.tool()
@@ -1591,11 +1652,16 @@ async def dsapi_search_office_actions(
 
     Args:
         patent_app_number: Patent application number (digits only, e.g., "16123456")
-        rows: Maximum results to return (default: 5, keep small — records are large)
+        rows: Maximum results to return (default: 5, max: 100; keep small — records are large)
 
     Returns:
         DSAPI response with full office action text records.
     """
+    try:
+        patent_app_number = validate_app_number(patent_app_number)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "patent_app_number")
+
     criteria = f'patentApplicationNumber:"{patent_app_number}"'
     result = await dsapi_client.search(
         dataset="oa_actions",
@@ -1644,6 +1710,11 @@ async def dsapi_lookup_status_code(
     Returns:
         DSAPI response with the status code description.
     """
+    try:
+        status_code = validate_status_code(status_code)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "status_code")
+
     criteria = f'appl_status_code:"{status_code}"'
     return await dsapi_client.search(
         dataset="oce_patent_examination_status_codes",
@@ -1673,17 +1744,18 @@ async def dsapi_list_status_codes(
 
     Args:
         criteria: Lucene query string (default: "*:*" for all)
-        rows: Maximum results to return (default: 50)
+        rows: Maximum results to return (default: 50, max: 100)
 
     Returns:
         DSAPI response with matching status code records.
     """
-    return await dsapi_client.search(
+    result = await dsapi_client.search(
         dataset="oce_patent_examination_status_codes",
         version="v1",
         criteria=criteria,
         rows=rows,
     )
+    return result if is_error(result) else check_and_truncate(result)
 
 
 # =====================================================================

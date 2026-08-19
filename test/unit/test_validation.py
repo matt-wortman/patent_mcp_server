@@ -1,7 +1,12 @@
 """Unit tests for validation functions."""
 import pytest
 
-from patent_mcp_server.util.validation import validate_patent_number, validate_app_number
+from patent_mcp_server.util.validation import (
+    validate_patent_number,
+    validate_app_number,
+    validate_pagination,
+    validate_status_code,
+)
 
 
 # ============================================================================
@@ -275,3 +280,75 @@ def test_validate_app_number_typical_lengths():
 
     # Series code + number (14/412,875)
     assert validate_app_number("14/412875") == "14412875"
+
+
+# ----------------------------------------------------------------------
+# validate_pagination
+# ----------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_validate_pagination_accepts_defaults():
+    """Typical values pass through unchanged."""
+    assert validate_pagination(0, 25, max_limit=100) == (0, 25)
+    assert validate_pagination(50, 100, max_limit=100) == (50, 100)
+
+
+@pytest.mark.unit
+def test_validate_pagination_rejects_negative_offset():
+    with pytest.raises(ValueError, match="offset"):
+        validate_pagination(-1, 25, max_limit=100)
+
+
+@pytest.mark.unit
+def test_validate_pagination_rejects_nonpositive_limit():
+    with pytest.raises(ValueError, match="limit"):
+        validate_pagination(0, 0, max_limit=100)
+    with pytest.raises(ValueError, match="limit"):
+        validate_pagination(0, -5, max_limit=100)
+
+
+@pytest.mark.unit
+def test_validate_pagination_rejects_limit_over_cap():
+    with pytest.raises(ValueError, match="limit"):
+        validate_pagination(0, 101, max_limit=100)
+
+
+@pytest.mark.unit
+def test_validate_pagination_rejects_non_integers():
+    with pytest.raises(ValueError):
+        validate_pagination("0", 25, max_limit=100)
+    with pytest.raises(ValueError):
+        validate_pagination(0, 25.5, max_limit=100)
+    # bools are ints in Python but nonsense as pagination values
+    with pytest.raises(ValueError):
+        validate_pagination(True, 25, max_limit=100)
+
+
+@pytest.mark.unit
+def test_validate_pagination_custom_names_in_message():
+    """DSAPI uses start/rows — error messages should use the caller's names."""
+    with pytest.raises(ValueError, match="rows"):
+        validate_pagination(0, 500, max_limit=100,
+                            offset_name="start", limit_name="rows")
+
+
+# ----------------------------------------------------------------------
+# validate_status_code
+# ----------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_validate_status_code_accepts_digits():
+    assert validate_status_code("30") == "30"
+    assert validate_status_code("150") == "150"
+
+
+@pytest.mark.unit
+def test_validate_status_code_rejects_non_digits():
+    """Status codes are interpolated into quoted Lucene strings —
+    anything but plain digits (e.g. a quote character) must be rejected."""
+    with pytest.raises(ValueError, match="[Ss]tatus code"):
+        validate_status_code('30" OR appl_status_code:"*')
+    with pytest.raises(ValueError, match="[Ss]tatus code"):
+        validate_status_code("")
+    with pytest.raises(ValueError, match="[Ss]tatus code"):
+        validate_status_code(None)

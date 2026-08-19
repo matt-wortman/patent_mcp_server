@@ -24,6 +24,7 @@ import logging
 
 from patent_mcp_server.util.errors import ApiError
 from patent_mcp_server.util.http import make_logged_client, request_json
+from patent_mcp_server.util.validation import validate_pagination
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import HTTPMethods
 
@@ -31,6 +32,11 @@ from patent_mcp_server.constants import HTTPMethods
 logger = logging.getLogger('dsapi_client')
 
 DSAPI_PATH_PREFIX = "/api/v1/patent/oa"
+
+# Responses are fully buffered and parsed before any truncation, so the page
+# size is the only thing bounding host memory against huge upstream records
+# (oa_actions rows are full office-action text).
+DSAPI_MAX_ROWS = 100
 
 
 class DsapiClient:
@@ -85,6 +91,15 @@ class DsapiClient:
         Returns:
             Search results dictionary or error dictionary.
         """
+        try:
+            validate_pagination(
+                start, rows,
+                max_limit=DSAPI_MAX_ROWS,
+                offset_name="start", limit_name="rows",
+            )
+        except ValueError as e:
+            return ApiError.validation_error(str(e))
+
         url = f"{config.API_BASE_URL}{DSAPI_PATH_PREFIX}/{dataset}/{version}/records"
         logger.info(f"Searching {dataset}/{version}: criteria={criteria}, start={start}, rows={rows}")
 
