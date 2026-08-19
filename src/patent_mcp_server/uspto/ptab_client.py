@@ -3,7 +3,7 @@ USPTO PTAB API Client (Patent Trial and Appeal Board)
 
 This module provides access to the PTAB API v3 at api.uspto.gov for accessing
 Patent Trial and Appeal Board data including IPR, PGR, CBM proceedings,
-trial decisions, appeal outcomes, and interference records.
+trial decisions, and appeal outcomes.
 
 Note: PTAB API v3 has been migrated to the Open Data Portal (ODP).
 Requires an ODP API key obtained from https://data.uspto.gov ("My ODP").
@@ -242,52 +242,6 @@ class PTABClient:
             Dictionary containing decision details
         """
         return await self._make_request(f"/decisions/{decision_id}")
-
-    async def search_interferences(
-        self,
-        query: Optional[str] = None,
-        interference_number: Optional[str] = None,
-        patent_number: Optional[str] = None,
-        party_name: Optional[str] = None,
-        offset: int = Defaults.SEARCH_START,
-        limit: int = Defaults.API_LIMIT,
-    ) -> Dict[str, Any]:
-        """Search historical interference proceedings (pre-AIA).
-
-        Args:
-            query: Full-text search query
-            interference_number: Interference proceeding number
-            patent_number: Patent number
-            party_name: Name of a party
-            offset: Starting position for pagination
-            limit: Maximum results to return
-
-        Returns:
-            Dictionary containing interference search results
-        """
-        params = {"offset": offset, "limit": limit}
-
-        if query:
-            params["q"] = query
-        if interference_number:
-            params["interferenceNumber"] = interference_number
-        if patent_number:
-            params["patentNumber"] = patent_number
-        if party_name:
-            params["partyName"] = party_name
-
-        return await self._make_request("/interferences/search", params=params)
-
-    async def get_interference(self, interference_number: str) -> Dict[str, Any]:
-        """Get details of a specific interference proceeding.
-
-        Args:
-            interference_number: The interference number
-
-        Returns:
-            Dictionary containing interference details
-        """
-        return await self._make_request(f"/interferences/{interference_number}")
 
     async def close(self):
         """Close the client connections."""

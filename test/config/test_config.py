@@ -6,6 +6,9 @@ from typing import Any, Dict
 class TestConfig:
     """Test configuration manager."""
 
+    # Not a test class — prevent pytest from collecting it (name matches Test*)
+    __test__ = False
+
     def __init__(self):
         """Initialize test configuration."""
         self._config = None

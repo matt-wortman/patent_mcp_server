@@ -32,18 +32,6 @@ class Fields:
     TOTAL = "total"
 
 
-class SortOrders:
-    """Common sort order strings."""
-    DATE_DESC = "date_publ desc"
-    DATE_ASC = "date_publ asc"
-
-
-class Operators:
-    """Query operators."""
-    AND = "AND"
-    OR = "OR"
-
-
 class PrintStatus:
     """PDF print job status values."""
     COMPLETED = "COMPLETED"
@@ -63,11 +51,7 @@ class Defaults:
     SEARCH_LIMIT = 100
     SEARCH_LIMIT_MAX = 500
     API_LIMIT = 25
-    DATASET_LIMIT = 10
-    REQUEST_TIMEOUT = 30.0
     RETRY_DELAY = 1.0
-    MAX_RETRIES = 3
-    SESSION_EXPIRY_MINUTES = 30
     RATE_LIMIT_RETRY_DELAY = 5
 
 
@@ -79,13 +63,5 @@ class PTABTrialTypes:
     DER = "DER"  # Derivation proceeding
 
     ALL = [IPR, PGR, CBM, DER]
-
-
-class PTABProceedingStatus:
-    """PTAB proceeding status values."""
-    PENDING = "Pending"
-    INSTITUTED = "Instituted"
-    TERMINATED = "Terminated"
-    FWD_ENTERED = "FWD Entered"  # Final Written Decision
 
 

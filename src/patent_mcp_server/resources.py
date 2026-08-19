@@ -251,7 +251,6 @@ DATA_SOURCES = {
             "proceedings": "IPR, PGR, CBM, derivation proceedings from 2012",
             "decisions": "Institution and final written decisions",
             "appeals": "Ex parte appeal decisions",
-            "interferences": "Historical interference proceedings (pre-AIA)",
         },
         "rate_limits": "Requires ODP API key, standard rate limits apply",
         "auth_required": True,

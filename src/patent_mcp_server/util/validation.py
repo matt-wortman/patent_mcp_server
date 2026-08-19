@@ -1,96 +1,10 @@
 """
-Input validation models for USPTO Patent MCP Server.
+Input validation for USPTO Patent MCP Server.
 
-This module provides Pydantic models for validating input parameters
-to ensure data integrity and provide clear error messages.
+Plain-function validators for patent and application numbers. Both accept
+formatted input (US prefixes, commas, slashes, spaces), strip everything
+but digits, and raise ValueError with a clear message on bad input.
 """
-
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional
-
-
-class PatentNumberInput(BaseModel):
-    """Validation model for patent numbers."""
-
-    patent_number: str = Field(..., min_length=1, description="Patent number")
-
-    @field_validator('patent_number')
-    @classmethod
-    def validate_patent_number(cls, v: str) -> str:
-        """Validate and clean patent number."""
-        # Remove any non-numeric characters
-        cleaned = ''.join(c for c in str(v) if c.isdigit())
-        if not cleaned:
-            raise ValueError("Patent number must contain at least one digit")
-        return cleaned
-
-
-class ApplicationNumberInput(BaseModel):
-    """Validation model for application numbers."""
-
-    app_num: str = Field(..., min_length=1, description="Application number")
-
-    @field_validator('app_num')
-    @classmethod
-    def validate_app_num(cls, v: str) -> str:
-        """Validate and clean application number."""
-        # Remove slashes, commas, and spaces
-        cleaned = ''.join(c for c in str(v) if c.isdigit())
-        if not cleaned:
-            raise ValueError("Application number must contain at least one digit")
-        if len(cleaned) < 6:
-            raise ValueError("Application number must be at least 6 digits")
-        return cleaned
-
-
-class SearchQueryInput(BaseModel):
-    """Validation model for search queries."""
-
-    query: str = Field(..., min_length=1, description="Search query string")
-    start: int = Field(default=0, ge=0, description="Starting position")
-    limit: int = Field(default=100, ge=1, le=1000, description="Maximum results")
-
-    @field_validator('query')
-    @classmethod
-    def validate_query(cls, v: str) -> str:
-        """Validate query string."""
-        v = v.strip()
-        if not v:
-            raise ValueError("Query cannot be empty or whitespace only")
-        return v
-
-
-class GuidInput(BaseModel):
-    """Validation model for document GUIDs."""
-
-    guid: str = Field(..., min_length=1, description="Document GUID")
-    source_type: str = Field(..., min_length=1, description="Source type")
-
-    @field_validator('guid')
-    @classmethod
-    def validate_guid(cls, v: str) -> str:
-        """Validate GUID format."""
-        v = v.strip()
-        if not v:
-            raise ValueError("GUID cannot be empty")
-        return v
-
-    @field_validator('source_type')
-    @classmethod
-    def validate_source_type(cls, v: str) -> str:
-        """Validate source type."""
-        v = v.strip()
-        valid_sources = ["USPAT", "US-PGPUB", "USOCR"]
-        if v not in valid_sources:
-            raise ValueError(f"Source type must be one of: {', '.join(valid_sources)}")
-        return v
-
-
-class PaginationInput(BaseModel):
-    """Validation model for pagination parameters."""
-
-    offset: int = Field(default=0, ge=0, description="Number of records to skip")
-    limit: int = Field(default=25, ge=1, le=1000, description="Number of records to return")
 
 
 def validate_patent_number(patent_number: str) -> str:
@@ -98,19 +12,20 @@ def validate_patent_number(patent_number: str) -> str:
     Validate and clean a patent number.
 
     Args:
-        patent_number: Raw patent number input
+        patent_number: Raw patent number input (e.g., "US 9,876,543")
 
     Returns:
-        Cleaned patent number string
+        Cleaned patent number string (digits only)
 
     Raises:
-        ValueError: If patent number is invalid
+        ValueError: If patent number is not a string or contains no digits
     """
-    try:
-        validated = PatentNumberInput(patent_number=patent_number)
-        return validated.patent_number
-    except Exception as e:
-        raise ValueError(f"Invalid patent number: {str(e)}")
+    if not isinstance(patent_number, str):
+        raise ValueError("Invalid patent number: input must be a string")
+    cleaned = ''.join(c for c in patent_number if c.isdigit())
+    if not cleaned:
+        raise ValueError("Invalid patent number: must contain at least one digit")
+    return cleaned
 
 
 def validate_app_number(app_num: str) -> str:
@@ -118,16 +33,20 @@ def validate_app_number(app_num: str) -> str:
     Validate and clean an application number.
 
     Args:
-        app_num: Raw application number input
+        app_num: Raw application number input (e.g., "14/412,875")
 
     Returns:
-        Cleaned application number string
+        Cleaned application number string (digits only)
 
     Raises:
-        ValueError: If application number is invalid
+        ValueError: If application number is not a string, contains no
+            digits, or has fewer than 6 digits
     """
-    try:
-        validated = ApplicationNumberInput(app_num=app_num)
-        return validated.app_num
-    except Exception as e:
-        raise ValueError(f"Invalid application number: {str(e)}")
+    if not isinstance(app_num, str):
+        raise ValueError("Invalid application number: input must be a string")
+    cleaned = ''.join(c for c in app_num if c.isdigit())
+    if not cleaned:
+        raise ValueError("Invalid application number: must contain at least one digit")
+    if len(cleaned) < 6:
+        raise ValueError("Invalid application number: must be at least 6 digits")
+    return cleaned

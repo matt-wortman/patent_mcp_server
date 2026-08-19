@@ -47,7 +47,6 @@ class Config:
     # Response Size Management (for LLM context windows)
     MAX_RESPONSE_TOKENS: int = int(os.getenv("MAX_RESPONSE_TOKENS", "8000"))
     TRUNCATE_LARGE_RESPONSES: bool = os.getenv("TRUNCATE_LARGE_RESPONSES", "true").lower() == "true"
-    DEFAULT_TRUNCATE_RESULTS: int = int(os.getenv("DEFAULT_TRUNCATE_RESULTS", "20"))
 
     # Download directory for large binary payloads (PDFs) and oversized JSON
     # dumps. Defaults to <tempdir>/patent_docs; override via env.

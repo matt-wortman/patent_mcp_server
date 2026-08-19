@@ -23,7 +23,7 @@ Legacy datasets (migration status uncertain as of April 2026):
   /api/v1/patent/status-codes on ODP
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import httpx
 import logging
 
@@ -37,7 +37,6 @@ from tenacity import (
 from patent_mcp_server.util.logging import LoggingTransport
 from patent_mcp_server.util.errors import ApiError
 from patent_mcp_server.config import config
-from patent_mcp_server.constants import HTTPMethods
 
 # Set up logging
 logger = logging.getLogger('dsapi_client')
@@ -79,59 +78,6 @@ class DsapiClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit with cleanup."""
         await self.close()
-
-    @retry(
-        stop=stop_after_attempt(config.MAX_RETRIES),
-        wait=wait_exponential(
-            multiplier=config.RETRY_DELAY,
-            min=config.RETRY_MIN_WAIT,
-            max=config.RETRY_MAX_WAIT,
-        ),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-        reraise=True,
-    )
-    async def get_fields(self, dataset: str, version: str) -> Dict[str, Any]:
-        """Get the field definitions for a dataset.
-
-        Args:
-            dataset: Dataset name (e.g., "oa_rejections")
-            version: Dataset version (e.g., "v2")
-
-        Returns:
-            Field definitions dictionary or error dictionary.
-        """
-        url = f"{DSAPI_BASE_URL}{DSAPI_PATH_PREFIX}/{dataset}/{version}/fields"
-        logger.info(f"Getting fields for {dataset}/{version}")
-
-        try:
-            response = await self.client.get(url, timeout=config.REQUEST_TIMEOUT)
-            response.raise_for_status()
-            logger.info(f"Fields request successful: {response.status_code}")
-            return response.json()
-
-        except httpx.HTTPStatusError as e:
-            status_code = e.response.status_code
-            logger.error(f"HTTP error: {status_code} - {e.response.text}")
-            try:
-                error_json = e.response.json()
-                return ApiError.from_http_error(
-                    status_code=status_code,
-                    response_text=e.response.text,
-                    response_json=error_json,
-                )
-            except Exception:
-                return ApiError.from_http_error(
-                    status_code=status_code,
-                    response_text=e.response.text,
-                )
-
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            logger.warning(f"Network error (will retry): {str(e)}")
-            raise  # Let tenacity handle the retry
-
-        except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            return ApiError.from_exception(e, f"DSAPI fields request for {dataset}/{version} failed")
 
     @retry(
         stop=stop_after_attempt(config.MAX_RETRIES),

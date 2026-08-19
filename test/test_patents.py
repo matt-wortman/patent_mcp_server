@@ -6,6 +6,8 @@ import sys
 import os
 from datetime import datetime
 
+import pytest
+
 # Set up detailed logging
 logging.basicConfig(
     #level=logging.WARNING,
@@ -22,6 +24,7 @@ from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
 
 # Main test function
+@pytest.mark.integration
 async def test_ppubs_direct():
     logger.info("Starting USPTO Public Search direct test")
     
@@ -170,6 +173,7 @@ async def test_ppubs_direct():
             await client.close()
             logger.info("Client closed")
 
+@pytest.mark.integration
 async def test_api_uspto_direct():
     logger.info("Starting USPTO API direct test")
     
