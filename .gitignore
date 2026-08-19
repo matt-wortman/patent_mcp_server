@@ -50,3 +50,4 @@ docs/USPTO_API_Reference_for_Claude.md
 docs/mcp-server-health-check-findings.md
 # Date-prefixed plans violate the repo's file-naming rule
 docs/plans/[0-9]*-*
+.playwright-mcp/

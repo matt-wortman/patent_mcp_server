@@ -17,7 +17,7 @@
 
 USPTO made four extra profile fields mandatory **effective 2026-08-18 (yesterday)**; non-compliance
 revokes ODP access **and your API key**. Every `odp_*`, `ptab_*`, `dsapi_*` tool depends on that key.
-Verify your account at https://data.usp to.gov/myodp. (Source: ODP release-4.0 notes; field names
+Verify your account at https://data.uspto.gov/myodp. (Source: ODP release-4.0 notes; field names
 reported second-hand as Job Title, Organization Name, Organization Type, Intended Use.)
 
 ## Established findings (trust these; don't re-explore)
