@@ -28,7 +28,9 @@ classifiers = [
 
 dependencies = [
     "httpx[http2]>=0.28.1",
-    "mcp[cli]>=1.3.0",
+    # <2 required: MCP SDK 2.0 removed mcp.server.fastmcp (renamed FastMCP
+    # to MCPServer); migrating is a deliberate project, not a version bump.
+    "mcp[cli]>=1.28.1,<2",
     "python-dotenv>=1.0.1",
     # Not imported by this package; security floor for a transitive dep of
     # mcp (CVE-2026-24486 fix).
