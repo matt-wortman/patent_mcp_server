@@ -10,17 +10,9 @@ Requires an ODP API key obtained from https://data.uspto.gov ("My ODP").
 """
 
 import logging
-from typing import Any, Optional, Dict, List
-import httpx
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
+from typing import Any, Optional, Dict
 
-from patent_mcp_server.util.logging import LoggingTransport
-from patent_mcp_server.util.errors import ApiError
+from patent_mcp_server.util.http import make_logged_client, request_json
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import HTTPMethods, Defaults, PTABTrialTypes
 
@@ -46,16 +38,7 @@ class PTABClient:
             "Accept": "application/json",
         }
 
-        transport = httpx.AsyncHTTPTransport()
-        logging_transport = LoggingTransport(transport)
-
-        self.client = httpx.AsyncClient(
-            headers=self.headers,
-            http2=True,
-            follow_redirects=True,
-            transport=logging_transport,
-            timeout=config.REQUEST_TIMEOUT,
-        )
+        self.client = make_logged_client(self.headers)
 
     async def __aenter__(self):
         return self
@@ -63,16 +46,6 @@ class PTABClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
-    @retry(
-        stop=stop_after_attempt(config.MAX_RETRIES),
-        wait=wait_exponential(
-            multiplier=config.RETRY_DELAY,
-            min=config.RETRY_MIN_WAIT,
-            max=config.RETRY_MAX_WAIT
-        ),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
-        reraise=True
-    )
     async def _make_request(
         self,
         endpoint: str,
@@ -93,40 +66,14 @@ class PTABClient:
         """
         url = f"{self.base_url}{endpoint}"
         logger.info(f"Making {method} request to {url}")
-
-        try:
-            if method == HTTPMethods.GET:
-                response = await self.client.get(url, params=params)
-            else:
-                response = await self.client.post(url, json=data)
-
-            response.raise_for_status()
-            return response.json()
-
-        except httpx.HTTPStatusError as e:
-            status_code = e.response.status_code
-            logger.error(f"HTTP error: {status_code} - {e.response.text}")
-
-            try:
-                error_json = e.response.json()
-                return ApiError.from_http_error(
-                    status_code=status_code,
-                    response_text=e.response.text,
-                    response_json=error_json
-                )
-            except Exception:
-                return ApiError.from_http_error(
-                    status_code=status_code,
-                    response_text=e.response.text
-                )
-
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            logger.warning(f"Network error (will retry): {str(e)}")
-            raise
-
-        except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            return ApiError.from_exception(e, f"PTAB API request failed")
+        return await request_json(
+            self.client,
+            method,
+            url,
+            params=params if method == HTTPMethods.GET else None,
+            json_body=data if method != HTTPMethods.GET else None,
+            context="PTAB API request failed",
+        )
 
     async def search_proceedings(
         self,
@@ -156,7 +103,7 @@ class PTABClient:
         Returns:
             Dictionary containing search results
         """
-        params = {
+        params: Dict[str, Any] = {
             "offset": offset,
             "limit": limit,
         }
@@ -215,7 +162,7 @@ class PTABClient:
         Returns:
             Dictionary containing decision search results
         """
-        params = {"offset": offset, "limit": limit}
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
         if query:
             params["q"] = query
