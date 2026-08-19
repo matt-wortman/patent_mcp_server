@@ -8,6 +8,13 @@ wheels/
 
 # Test results
 .pytest_cache
+test/test_results/
+
+# Local API dumps and downloads (produced by manual test scripts)
+# Anchored to repo root: src/patent_mcp_server/json/ is load-bearing package data
+/json/
+/pdfs/
+*.gif
 
 # Jupyter-generated files
 .ipynb_checkpoints/
