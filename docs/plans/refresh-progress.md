@@ -60,6 +60,40 @@ Exit gate: `uv run pytest` → **86 passed, 57 deselected**. Server module impor
 Exit gate: `uv run pytest` → **92 passed, 57 deselected**; live smoke
 `uv run pytest test/smoke/test_{odp,ptab,dsapi}_smoke.py -m smoke` → **32 passed** (13s).
 
+### Session 3 — Upstream port + currency polish (completed 2026-08-19, branch `uspto-refresh`)
+
+- `3c77b3f` — PPUBS session-race fix (faithful port of upstream `2ea55322`) + currency:
+  - `ppubs_uspto_gov.py`: `asyncio.Lock` serializes session establishment with a
+    double-checked cache re-check (`get_session` → `_establish_session`); 403 refresh
+    goes through `_refresh_session(stale_token)` which skips re-establishing when
+    another call already replaced the token; the `X-Access-Token` now travels
+    per-request (`_with_auth` in `make_request`, `_auth_headers()` on the three raw
+    `client.post`/`build_request` calls in the PDF pipeline) instead of being written
+    into shared client headers; `_ensure_case_id()` returns a stable local case id to
+    `run_query`/`_request_save` so a concurrent refresh can't swap it mid-assembly.
+  - Version drift fixed at the root: `config.PACKAGE_VERSION = importlib.metadata.version("patent_mcp_server")`;
+    `USER_AGENT` default now interpolates it; `patents.py` docstring no longer carries
+    a version number at all.
+  - `dsapi_client.py` module docstring: stale "may 404" legacy-dataset warnings
+    removed (all six datasets confirmed live 2026-08-19); dead fields-endpoint line
+    dropped (its method was deleted in Session 1).
+  - README: dead `developer.uspto.gov/api-catalog` PTAB link → `https://data.uspto.gov/apis/ptab-api`
+    (old host no longer resolves at all — curl gets connection failure; new URL
+    returns 200, verified before writing).
+
+Exit gate: `uv run pytest` → **92 passed, 57 deselected**;
+`uv run pytest test/smoke/test_ppubs_smoke.py -m smoke` → **4 passed** (7.6s) —
+search, application search, full document, and PDF download all live through the
+new lock/per-request-token code path. `config.USER_AGENT` verified to render
+`patent-mcp-server/0.10.0` from package metadata.
+
+## Reference — upstream PPUBS field codes (recorded per plan; do NOT adopt)
+
+Ours (verified working live 2026-08-19): `.ttl.` `.abst.` `.aclm.` `.isd.` `.an.`
+Upstream v1.1.1 uses instead: `.ti.` `.ab.` `.clm.` `.as.` `@pd` `@ad`
+Fallback only — if PPUBS field syntax ever breaks, try upstream's codes before
+deeper debugging. No code change now (plan guardrail: no speculative rewrite).
+
 ## Decisions made
 
 - **Working branch is `uspto-refresh`** (created off `main` at `82c748b`). All sessions
@@ -85,6 +119,16 @@ Exit gate: `uv run pytest` → **92 passed, 57 deselected**; live smoke
   shape (ApiError dict), strictly better messages.
 - (S2) Pre-existing Pyright errors in `ptab_client.py` fixed by annotating the two params
   dicts as `Dict[str, Any]` (was inferred `Dict[str, int]`).
+- (S3) **Kept our PDF download URL `/api/print/save/{pdf_name}`** — upstream uses
+  `/api/internal/print/save/`, but that difference predates the ported commit (it was a
+  context line, not part of the fix), and ours passes the live PDF smoke test. Only the
+  concurrency fix was ported, exactly as the plan requires.
+- (S3) **PPUBS did NOT adopt `util/http.py`** — the ported fix is deliberately grafted
+  onto the client's existing structure so it stays a faithful port. Whether PPUBS should
+  share the helpers is a Session 4 review question, not settled here.
+- (S3) `PACKAGE_VERSION` lives in `config.py` (module-level, imported alongside `config`).
+  If the package is ever run without being installed, the import raises
+  `PackageNotFoundError` — acceptable because `uv run` always installs the project.
 
 ## Surprises
 
@@ -96,21 +140,33 @@ Exit gate: `uv run pytest` → **92 passed, 57 deselected**; live smoke
 - (S2) None. Conversion was clean; smoke suite green on first run after conversion.
   User confirmed the MyODP profile action item is done (account verified 2026-08-19),
   so the API key is in good standing for future sessions' smoke tests.
+- (S3) Upstream commit `2ea55322` bundles the session fix with a streamable-http
+  transport feature, protocol-layer tests, and a shutdown fix — none of that was
+  ported (out of scope; our server is stdio-only). Upstream also grew branches
+  (`fix/ppubs-live-api-drift`, `feature/federal-litigation-documents`) that may be
+  worth a look in a future cycle, after this refresh lands.
+- (S3) The IDE's Pyright surfaces pre-existing warnings in `ppubs_uspto_gov.py` /
+  `patents.py` (Union narrowing on `make_request` return, `sources=None` default) and
+  falsely reports `util.http` unresolved (stale IDE env — tests import it fine).
+  Session 4's review should consider the real ones; ignore the import ghost.
 
 ## Next session's tasks verbatim
 
-### Session 3 — Upstream port + currency polish (est. 40–60K tokens)
+### Session 4 — Fable 5 code review + release (est. 80–120K tokens)
 
-1. `git fetch upstream`; read commit `2ea55322`; port the PPUBS session-race fix.
-2. Live-verify a PPUBS search + PDF download.
-3. Fix version drift via `importlib.metadata`; delete stale "may 404" comments; fix README dead
-   developer.uspto.gov link; note upstream's alternate field codes in the progress file.
-4. Exit: pytest + PPUBS live smoke green → commit → update progress file.
+1. Full review of the now-smaller src/ (~2,300 lines) and test/: error paths, tool-boundary
+   validation, docstring accuracy (docstrings ARE the MCP tool descriptions — fix falsehoods,
+   don't gut them), log hygiene, async correctness. Use the `/code-review` skill at high effort
+   plus a manual pass over patents.py.
+2. Document (not remove) the tool-naming overlaps.
+3. Fix findings; update CLAUDE.md/README version history; bump to v0.11.0; tag.
+4. Exit: pytest green + FULL live smoke pass → commit + tag.
 
-Design constraints (from plan — do not relitigate): manual port of ONE fix, not a merge.
-Add `asyncio.Lock` in `PpubsClient.__init__`; wrap `get_session()` body with double-checked
-expiry re-check; pass `X-Access-Token` per-request instead of mutating shared headers.
-Read the real upstream commit — port faithfully, not from memory. Version strings: read once
-via `importlib.metadata.version("patent_mcp_server")` so they can never drift again (touches
-`patents.py` docstring string and `config.USER_AGENT`, both currently saying 0.7.0).
-Stale "may 404" comments live in the `dsapi_client.py` module docstring (lines ~14-22).
+Carry-over review candidates for Session 4 (recorded in earlier sessions):
+
+- `test/config/` — `TestConfig` + `test_data.json` have no callers outside their own file.
+- Whether PPUBS should adopt `util/http.py` helpers (post-port decision, see S3 note).
+- Pre-existing Pyright warnings (S3 surprise note above); `test/test_patents.py`
+  possibly-unbound warnings (S1 note — integration-skipped manual-script heritage).
+- Session 4 end gate: full smoke suite (all 37+) + liveness probe + restart the MCP
+  server and exercise one tool per backend through MCP (plan "Verification" section).
