@@ -4,6 +4,40 @@ import json
 
 logger = logging.getLogger('logging_transport')
 
+# Headers safe to log verbatim. Anything not listed is masked — allowlist
+# semantics, so a new credential-bearing header can never leak by default.
+SAFE_HEADERS = frozenset({
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "cache-control",
+    "connection",
+    "content-encoding",
+    "content-length",
+    "content-type",
+    "date",
+    "etag",
+    "host",
+    "last-modified",
+    "pragma",
+    "referer",
+    "server",
+    "transfer-encoding",
+    "user-agent",
+    "vary",
+})
+
+REDACTED = "[REDACTED]"
+
+
+def redact_headers(headers) -> dict:
+    """Return a copy of ``headers`` with every non-allowlisted value masked."""
+    return {
+        name: value if name.lower() in SAFE_HEADERS else REDACTED
+        for name, value in dict(headers).items()
+    }
+
+
 # Define custom transport that logs all requests and responses
 class LoggingTransport(httpx.AsyncBaseTransport):
 
@@ -13,8 +47,8 @@ class LoggingTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request):
         # Log the request
         logger.debug(f"REQUEST: {request.method} {request.url}")
-        logger.debug(f"REQUEST HEADERS: {dict(request.headers)}")
-        
+        logger.debug(f"REQUEST HEADERS: {redact_headers(request.headers)}")
+
         try:
             # For body logging, convert to string if possible
             if request.content:
@@ -35,9 +69,12 @@ class LoggingTransport(httpx.AsyncBaseTransport):
 
         # Get the response
         response = await self.transport.handle_async_request(request)
-        
+
         # Log the response
         logger.debug(f"RESPONSE: {response.status_code} from {request.url}")
-        logger.debug(f"RESPONSE HEADERS: {dict(response.headers)}")
-        
+        logger.debug(f"RESPONSE HEADERS: {redact_headers(response.headers)}")
+
         return response
+
+    async def aclose(self):
+        await self.transport.aclose()
