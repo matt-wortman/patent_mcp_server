@@ -138,6 +138,14 @@ def test_list_still_oversized_saves_to_disk(tmp_download_dir):
     assert summary.get("file_path")
     assert os.path.isfile(summary["file_path"])
 
+    # The file must hold the COMPLETE original payload — not the sliced copy.
+    # (Regression: the summary says "full payload saved to disk", so losing
+    # records here is silent data loss.)
+    with open(summary["file_path"], encoding="utf-8") as f:
+        saved = json.load(f)
+    assert saved["results"] == huge_items
+    assert len(saved["results"]) == 10
+
 
 # ----------------------------------------------------------------------
 # check_and_truncate respects config.TRUNCATE_LARGE_RESPONSES

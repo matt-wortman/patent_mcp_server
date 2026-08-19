@@ -335,9 +335,11 @@ def truncate_response(
                 f"(estimated {estimated_tokens} tokens exceeded {max_tokens} limit)"
             )
 
-            # Re-check: if still oversized, fall through to disk-save
+            # Re-check: if still oversized, fall through to disk-save.
+            # Save the ORIGINAL response — the summary promises the full
+            # payload is on disk, so saving the sliced copy loses records.
             if estimate_tokens(truncated) > max_tokens:
-                return _save_oversized_to_disk(truncated, source)
+                return _save_oversized_to_disk(response, source)
 
             return truncated
 
