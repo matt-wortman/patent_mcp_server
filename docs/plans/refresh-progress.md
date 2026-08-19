@@ -35,6 +35,31 @@ Sessions must not rely on any other session's conversation memory.
 
 Exit gate: `uv run pytest` → **86 passed, 57 deselected**. Server module imports clean.
 
+### Session 2 — Dedup + 429 handling (completed 2026-08-19, branch `uspto-refresh`)
+
+- `f6f5c66` — shared HTTP helpers + 429 handling:
+  - New `src/patent_mcp_server/util/http.py`:
+    - `make_logged_client(headers)` — the httpx AsyncClient factory (LoggingTransport,
+      http2, follow_redirects, config timeout) replacing the copy-pasted `__init__` blocks.
+    - `_send(...)` — tenacity-decorated core (same network-retry policy as before, now in
+      ONE place) with the 429 loop inside: reads `Retry-After` then
+      `x-rate-limit-retry-after-seconds`, sleeps `min(delay, 60)` (default backoff
+      `5s × (attempt+1)` when headers absent/unparseable), retries up to
+      `config.MAX_RETRIES`, then returns a plain-English `RATE_LIMITED` ApiError (429).
+      Other HTTP errors → the formerly-triplicated `ApiError.from_http_error` block.
+    - `request_json(...)` and `request_bytes(...)` — public wrappers (JSON parse vs.
+      binary content dict). `request_bytes` serves ODP `download_file` (4 req/min limit).
+  - `api_uspto_gov.py`, `ptab_client.py`, `dsapi_client.py` converted onto the helpers.
+    Client names, method signatures, and output shapes unchanged (verified: patents.py
+    call sites are `make_request`/`download_file`/`build_query_string`, `dsapi.search`,
+    and the 4 public PTAB methods — none touched).
+  - `dsapi_client.py`: hardcoded `DSAPI_BASE_URL` removed → `config.API_BASE_URL`.
+  - New `test/unit/test_http.py` — 6 unit tests for the pure Retry-After parsing logic
+    (no network; constructs `httpx.Response` objects directly, no mocked transport).
+
+Exit gate: `uv run pytest` → **92 passed, 57 deselected**; live smoke
+`uv run pytest test/smoke/test_{odp,ptab,dsapi}_smoke.py -m smoke` → **32 passed** (13s).
+
 ## Decisions made
 
 - **Working branch is `uspto-refresh`** (created off `main` at `82c748b`). All sessions
@@ -47,30 +72,45 @@ Exit gate: `uv run pytest` → **86 passed, 57 deselected**. Server module impor
   `test_data.json` have no callers outside their own file — a Session 4 review candidate.
 - `python-multipart` removal recorded: it was a promoted transitive pin for CVE-2026-24486;
   nothing in the resolved dependency tree requires it anymore.
+- (S2) **DSAPI client now uses HTTP/2** — the shared `make_logged_client` factory always
+  passes `http2=True`; the old DSAPI `__init__` didn't. Deliberate: same host as ODP/PTAB,
+  and all 12 DSAPI smoke tests pass live over h2. If DSAPI ever misbehaves, this is the
+  one transport-level behavior change to suspect.
+- (S2) **PPUBS client untouched** — plan says adopt helpers only if it drops in cleanly;
+  its session/token/cookie handling and existing 429 logic make that a non-trivial fit,
+  and Session 3 rewrites its session handling anyway. Revisit after the upstream port
+  (Session 3 or 4), not before.
+- (S2) `download_file` (ODP) HTTPStatusError path now also tries to parse the error body
+  as JSON (via the shared block) — previously it passed only `response_text`. Same output
+  shape (ApiError dict), strictly better messages.
+- (S2) Pre-existing Pyright errors in `ptab_client.py` fixed by annotating the two params
+  dicts as `Dict[str, Any]` (was inferred `Dict[str, int]`).
 
 ## Surprises
 
-- Pre-existing Pyright errors in `ptab_client.py` (`params` dict inferred as `Dict[str, int]`,
-  then assigned strings) — NOT introduced by Session 1; same pattern exists in
-  `search_proceedings`/`search_decisions`. Fold into Session 2's client rework or Session 4 review.
 - Pre-existing Pyright warnings in `test/test_patents.py` (possibly-unbound `client`, etc.) —
   manual-script heritage; harmless, tests are integration-skipped.
 - `test/manual/` is gitignored but present locally (`test_odp_download.py`) — left alone.
 - README line 3 still links retired `developer.uspto.gov/api-catalog` — deliberate; that fix
   is Session 3 scope.
+- (S2) None. Conversion was clean; smoke suite green on first run after conversion.
+  User confirmed the MyODP profile action item is done (account verified 2026-08-19),
+  so the API key is in good standing for future sessions' smoke tests.
 
 ## Next session's tasks verbatim
 
-### Session 2 — Dedup + 429 handling (est. 60–80K tokens)
-1. Create `util/http.py` (`request_json` with retry/error/429; `make_logged_client`).
-2. Convert `api_uspto_gov.py`, `ptab_client.py`, `dsapi_client.py` onto it.
-3. Fix `dsapi_client.py:45` hardcoded base URL → `config.API_BASE_URL`.
-4. Exit: pytest green + live smoke (`uv run pytest -m smoke` for ODP/PTAB/DSAPI files) →
-   commit → update progress file.
+### Session 3 — Upstream port + currency polish (est. 40–60K tokens)
 
-Design constraints (from plan — do not relitigate): shared helpers, NOT a base class; 429
-handling is a plain loop inside `request_json` reading `Retry-After` (fallback
-`x-rate-limit-retry-after-seconds`), `asyncio.sleep(min(delay, 60))`, retry up to
-`config.MAX_RETRIES`, then `ApiError` 429; clients keep names/shapes/output formats; PPUBS
-adopts helpers only if it drops in cleanly. Live smoke requires `USPTO_API_KEY` in `.env` —
-which requires the MyODP profile action item (see plan) to still be in good standing.
+1. `git fetch upstream`; read commit `2ea55322`; port the PPUBS session-race fix.
+2. Live-verify a PPUBS search + PDF download.
+3. Fix version drift via `importlib.metadata`; delete stale "may 404" comments; fix README dead
+   developer.uspto.gov link; note upstream's alternate field codes in the progress file.
+4. Exit: pytest + PPUBS live smoke green → commit → update progress file.
+
+Design constraints (from plan — do not relitigate): manual port of ONE fix, not a merge.
+Add `asyncio.Lock` in `PpubsClient.__init__`; wrap `get_session()` body with double-checked
+expiry re-check; pass `X-Access-Token` per-request instead of mutating shared headers.
+Read the real upstream commit — port faithfully, not from memory. Version strings: read once
+via `importlib.metadata.version("patent_mcp_server")` so they can never drift again (touches
+`patents.py` docstring string and `config.USER_AGENT`, both currently saying 0.7.0).
+Stale "may 404" comments live in the `dsapi_client.py` module docstring (lines ~14-22).
