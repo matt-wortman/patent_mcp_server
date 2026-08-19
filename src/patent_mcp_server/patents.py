@@ -6,7 +6,8 @@ with multiple USPTO patent data APIs:
 
 1. ppubs.uspto.gov - Full text patent documents, PDF downloads, and advanced search
 2. api.uspto.gov - Metadata, continuity information, transactions, and assignments
-3. PTAB API v3 - Patent Trial and Appeal Board proceedings and decisions
+3. PTAB API v3 - Patent Trial and Appeal Board proceedings, trial documents,
+   decisions, ex parte appeals, and interferences
 4. DSAPI (api.uspto.gov) - Office actions, enriched citations, litigation, status codes
 
 The server uses stdio transport for Claude Code/Cursor integration.
@@ -987,6 +988,32 @@ async def odp_get_documents(app_num: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+async def odp_get_associated_documents(app_num: str) -> Dict[str, Any]:
+    """Get published-document metadata (pre-grant publication and grant XML)
+    associated with an application.
+
+    USE THIS TOOL WHEN: You need the bulk-data location of the published
+    pgpub or grant XML for an application — each entry carries a
+    fileLocationURI that odp_download_dataset_file can fetch.
+
+    Args:
+        app_num: Application number without slashes (e.g., "14412875")
+    """
+    try:
+        app_num = validate_app_number(str(app_num))
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "app_num")
+
+    url = f"{config.API_BASE_URL}/api/v1/patent/applications/{app_num}/associated-documents"
+    result = await api_client.make_request(url)
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_odp(result))
+
+
+@mcp.tool()
 async def odp_download_document(
     app_num: str,
     document_id: str,
@@ -1257,6 +1284,129 @@ async def odp_get_dataset(product_id: str) -> Dict[str, Any]:
     )
 
 
+@mcp.tool()
+async def odp_download_dataset_file(file_url: str) -> Dict[str, Any]:
+    """Download a bulk dataset product file from USPTO.
+
+    USE THIS TOOL WHEN: You have a file URL from odp_get_dataset or
+    odp_get_associated_documents (fileLocationURI / fileDownloadURI) and
+    need the actual file — e.g., the published grant XML or a bulk archive.
+
+    WARNING: Many bulk products are multi-gigabyte archives. Check the
+    file size in the dataset listing before downloading; per-application
+    XML files (from odp_get_associated_documents) are small and safe.
+
+    Args:
+        file_url: Full file URL under
+            https://api.uspto.gov/api/v1/datasets/products/files/...
+
+    Returns:
+        Dictionary with file_path to the saved file on success.
+    """
+    import os
+
+    dataset_files_prefix = f"{config.API_BASE_URL}/api/v1/datasets/products/files/"
+    if not file_url or not file_url.startswith(dataset_files_prefix):
+        return ApiError.validation_error(
+            f"file_url must start with {dataset_files_prefix}", "file_url"
+        )
+
+    result = await api_client.download_file(file_url)
+
+    if is_error(result):
+        return result
+
+    download_dir = config.DOWNLOAD_DIR
+    os.makedirs(download_dir, exist_ok=True)
+
+    filename = os.path.basename(file_url.split("?")[0])
+    file_path = os.path.join(download_dir, filename)
+
+    with open(file_path, "wb") as f:
+        f.write(result["content"])
+
+    return {
+        "success": True,
+        "file_path": file_path,
+        "size_bytes": result["size_bytes"],
+        "content_type": result["content_type"],
+        "file_url": file_url,
+    }
+
+
+@mcp.tool()
+async def odp_search_petition_decisions(
+    query: Optional[str] = None,
+    app_num: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Search USPTO final petition decisions.
+
+    USE THIS TOOL WHEN: You need decisions on petitions filed during
+    prosecution — petitions to revive, to invoke supervisory authority,
+    to make special, etc. Each record includes the petition type, decision
+    type, deciding office, dates, and the application it belongs to.
+
+    Args:
+        query: Free-form query or ODP DSL field:value syntax (e.g.,
+            "decisionTypeCodeDescriptionText:GRANTED")
+        app_num: Filter by application number (builds an
+            applicationNumberText:<value> clause)
+        offset: Starting position (default: 0)
+        limit: Max results (default: 25, max: 100)
+    """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
+    if app_num:
+        try:
+            app_num = validate_app_number(str(app_num))
+        except ValueError as e:
+            return ApiError.validation_error(str(e), "app_num")
+
+    params: Dict[str, Any] = {"offset": offset, "limit": limit}
+    q_parts = []
+    if query:
+        q_parts.append(query)
+    if app_num:
+        q_parts.append(f"applicationNumberText:{app_num}")
+    if q_parts:
+        params["q"] = " AND ".join(q_parts)
+
+    query_string = api_client.build_query_string(params)
+    url = f"{config.API_BASE_URL}/api/v1/petition/decisions/search?{query_string}"
+    result = await api_client.make_request(url)
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_odp(result, offset, limit))
+
+
+@mcp.tool()
+async def odp_get_petition_decision(record_id: str) -> Dict[str, Any]:
+    """Get one final petition decision by its record identifier.
+
+    Args:
+        record_id: petitionDecisionRecordIdentifier from
+            odp_search_petition_decisions (a UUID-style string)
+    """
+    if not record_id or not record_id.strip():
+        return ApiError.validation_error("record_id is required", "record_id")
+
+    record_id = record_id.strip()
+    url = f"{config.API_BASE_URL}/api/v1/petition/decisions/{record_id}"
+    result = await api_client.make_request(url)
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_odp(result))
+
+
 # =====================================================================
 # PTAB Tools - Patent Trial and Appeal Board
 # =====================================================================
@@ -1396,6 +1546,188 @@ async def ptab_get_decision(decision_id: str) -> Dict[str, Any]:
         decision_id: Decision identifier
     """
     return await ptab_client.get_decision(decision_id)
+
+
+@mcp.tool()
+async def ptab_search_trial_documents(
+    query: Optional[str] = None,
+    proceeding_number: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Search documents filed in PTAB trial proceedings (petitions, motions,
+    exhibits, orders).
+
+    USE THIS TOOL WHEN: You need the paper trail of a PTAB trial — what was
+    filed, by whom, and when. Each record includes a fileDownloadURI.
+
+    Args:
+        query: Free-form query or ODP DSL field:value syntax
+        proceeding_number: Filter by trial number (e.g., "IPR2023-00037")
+        offset: Starting position (default: 0)
+        limit: Max results (default: 25, max: 100)
+    """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
+    result = await ptab_client.search_documents(
+        query=query,
+        proceeding_number=proceeding_number,
+        offset=offset,
+        limit=limit,
+    )
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+
+
+@mcp.tool()
+async def ptab_get_proceeding_documents(proceeding_number: str) -> Dict[str, Any]:
+    """Get all documents filed in one PTAB proceeding.
+
+    Args:
+        proceeding_number: Proceeding number (e.g., "IPR2023-00037")
+    """
+    if not proceeding_number or not proceeding_number.strip():
+        return ApiError.validation_error(
+            "proceeding_number is required", "proceeding_number"
+        )
+
+    result = await ptab_client.get_proceeding_documents(proceeding_number.strip())
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_ptab(result))
+
+
+@mcp.tool()
+async def ptab_search_appeal_decisions(
+    query: Optional[str] = None,
+    appeal_number: Optional[str] = None,
+    app_num: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Search PTAB ex parte appeal decisions (appeals from examiner
+    rejections, distinct from IPR/PGR trials).
+
+    USE THIS TOOL WHEN: You need Board decisions on ex parte appeals —
+    e.g., how often an examiner or art unit is affirmed/reversed, or the
+    outcome of a specific application's appeal.
+
+    Args:
+        query: Free-form query or ODP DSL field:value syntax
+        appeal_number: Filter by appeal number (e.g., "2026002664")
+        app_num: Filter by application number
+        offset: Starting position (default: 0)
+        limit: Max results (default: 25, max: 100)
+    """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
+    if app_num:
+        try:
+            app_num = validate_app_number(str(app_num))
+        except ValueError as e:
+            return ApiError.validation_error(str(e), "app_num")
+
+    result = await ptab_client.search_appeal_decisions(
+        query=query,
+        appeal_number=appeal_number,
+        app_num=app_num,
+        offset=offset,
+        limit=limit,
+    )
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+
+
+@mcp.tool()
+async def ptab_get_appeal_decisions(appeal_number: str) -> Dict[str, Any]:
+    """Get decisions for one PTAB ex parte appeal.
+
+    Args:
+        appeal_number: Appeal number (e.g., "2026002664")
+    """
+    if not appeal_number or not appeal_number.strip():
+        return ApiError.validation_error(
+            "appeal_number is required", "appeal_number"
+        )
+
+    result = await ptab_client.get_appeal_decisions(appeal_number.strip())
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_ptab(result))
+
+
+@mcp.tool()
+async def ptab_search_interference_decisions(
+    query: Optional[str] = None,
+    interference_number: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Search PTAB interference decisions (priority contests between
+    parties claiming the same invention, pre-AIA).
+
+    USE THIS TOOL WHEN: You need decisions from patent interference
+    proceedings — mostly historical (pre-2013 filings) but still cited in
+    priority disputes.
+
+    Args:
+        query: Free-form query or ODP DSL field:value syntax
+        interference_number: Filter by interference number (e.g., "106130")
+        offset: Starting position (default: 0)
+        limit: Max results (default: 25, max: 100)
+    """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
+    result = await ptab_client.search_interference_decisions(
+        query=query,
+        interference_number=interference_number,
+        offset=offset,
+        limit=limit,
+    )
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+
+
+@mcp.tool()
+async def ptab_get_interference_decisions(interference_number: str) -> Dict[str, Any]:
+    """Get decisions for one PTAB interference.
+
+    Args:
+        interference_number: Interference number (e.g., "106130")
+    """
+    if not interference_number or not interference_number.strip():
+        return ApiError.validation_error(
+            "interference_number is required", "interference_number"
+        )
+
+    result = await ptab_client.get_interference_decisions(interference_number.strip())
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_ptab(result))
 
 
 # =====================================================================

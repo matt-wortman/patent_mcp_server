@@ -131,6 +131,9 @@ class ResponseEnvelope:
         if "patentFileWrapperDataBag" in raw_response:
             results = raw_response.get("patentFileWrapperDataBag", [])
             total = raw_response.get("count", len(results))
+        elif "petitionDecisionDataBag" in raw_response:
+            results = raw_response.get("petitionDecisionDataBag", [])
+            total = raw_response.get("count", len(results))
         elif "results" in raw_response:
             results = raw_response.get("results", [])
             total = raw_response.get("count", len(results))
@@ -168,11 +171,11 @@ class ResponseEnvelope:
         # DataBag keys, similar to ODP's patentFileWrapperDataBag pattern.
         # Search the known PTAB response keys first, then fall back to generic keys.
         _PTAB_RESPONSE_KEYS = [
-            "patentTrialProceedingDataBag",     # /proceedings/search
-            "patentTrialDecisionDataBag",       # /decisions/search
-            "patentTrialDocumentDataBag",       # /proceedings/{id}/documents
-            "patentTrialAppealDecisionDataBag", # /appeals/decisions/search
-            "patentTrialInterferenceDataBag",   # /interferences/search
+            "patentTrialProceedingDataBag",  # /trials/proceedings/search
+            "patentTrialDecisionDataBag",    # /trials/decisions/search
+            "patentTrialDocumentDataBag",    # /trials/documents endpoints
+            "patentAppealDataBag",           # /appeals decisions endpoints
+            "patentInterferenceDataBag",     # /interferences decisions endpoints
             # Generic fallbacks (legacy or future format changes)
             "results",
             "data",

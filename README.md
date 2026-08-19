@@ -10,13 +10,13 @@ Special thanks to [Parker Hancock](https://github.com/parkerhancock), author of 
 
 ## Features
 
-This server provides **34 tools** across 4 USPTO data sources for:
+This server provides **44 tools** across 4 USPTO data sources for:
 
 1. **Patent Search** - Full-text search of granted patents and published applications via PPUBS
 2. **Full Text Documents** - Get complete text of patents including claims, description, and specification
 3. **PDF Downloads** - Download patents as PDF files (Claude Desktop doesn't support this as a client currently)
 4. **Prosecution History** - Access office actions, transactions, and file wrapper data
-5. **PTAB Proceedings** - Search and retrieve Patent Trial and Appeal Board proceedings (IPR, PGR, CBM) and decisions
+5. **PTAB Proceedings** - Search and retrieve Patent Trial and Appeal Board proceedings (IPR, PGR, CBM), trial documents, decisions, ex parte appeal decisions, and interference decisions
 6. **Office Actions & Rejections** - Full-text office actions with §101/102/103/112 rejection flags via DSAPI
 7. **Patent Litigation** - Search 74,000+ district court patent cases via DSAPI
 8. **Citation Analysis** - Enriched citation data, examiner/applicant provenance, and citation metrics
@@ -30,7 +30,7 @@ This server interacts with four USPTO patent data sources:
 |--------|-------------|---------------|
 | **ppubs.uspto.gov** | Full text documents, PDF downloads, advanced search (daily updates) | No |
 | **api.uspto.gov (ODP)** | Metadata, continuity, transactions, assignments, prosecution history | Yes (ODP API Key) |
-| **PTAB API v3 (ODP)** | IPR/PGR/CBM/derivation proceedings and decisions | Yes (ODP API Key) |
+| **PTAB API v3 (ODP)** | IPR/PGR/CBM/derivation proceedings, trial documents, decisions, appeals, interferences | Yes (ODP API Key) |
 | **DSAPI (api.uspto.gov)** | Office actions, enriched citations, patent litigation, status codes | Yes (ODP API Key) |
 
 ## Prerequisites
@@ -185,9 +185,13 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 | `odp_get_foreign_priority` | Get foreign priority claims |
 | `odp_get_transactions` | Get prosecution transaction history |
 | `odp_get_documents` | Get file wrapper documents |
+| `odp_get_associated_documents` | Get pgpub/grant XML publication metadata |
 | `odp_download_document` | Download a file wrapper document (PDF) to disk |
 | `odp_search_datasets` | Search bulk data products |
 | `odp_get_dataset` | Get dataset product details |
+| `odp_download_dataset_file` | Download a bulk dataset file to disk |
+| `odp_search_petition_decisions` | Search final petition decisions |
+| `odp_get_petition_decision` | Get one petition decision by record id |
 
 ### PTAB API v3 (Patent Trial and Appeal Board)
 | Tool | Description |
@@ -196,6 +200,12 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 | `ptab_get_proceeding` | Get proceeding details |
 | `ptab_search_decisions` | Search trial decisions |
 | `ptab_get_decision` | Get decision details |
+| `ptab_search_trial_documents` | Search documents filed in PTAB trials |
+| `ptab_get_proceeding_documents` | List all documents in one proceeding |
+| `ptab_search_appeal_decisions` | Search ex parte appeal decisions |
+| `ptab_get_appeal_decisions` | Get decisions for one appeal |
+| `ptab_search_interference_decisions` | Search interference decisions |
+| `ptab_get_interference_decisions` | Get decisions for one interference |
 
 ### DSAPI (Data Set API) — Office Actions, Citations & Litigation
 | Tool | Description |

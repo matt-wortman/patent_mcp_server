@@ -31,6 +31,10 @@ from patent_mcp_server.patents import (
     odp_download_document,
     odp_search_datasets,
     odp_get_dataset,
+    odp_get_associated_documents,
+    odp_search_petition_decisions,
+    odp_get_petition_decision,
+    odp_download_dataset_file,
 )
 
 pytestmark = [pytest.mark.smoke, pytest.mark.asyncio(loop_scope="session")]
@@ -319,3 +323,65 @@ async def test_odp_get_application_never_raw_oversized():
             "expected either a truncated response or an _oversized disk-save. "
             "check_and_truncate may not be wired in."
         )
+
+
+# --- Petition decisions, associated documents, dataset files (v0.12.0) --
+
+PETITION_APP_NUM = "09756788"   # one petition decision on record
+ASSOC_DOC_APP_NUM = "14412875"  # granted application with pgpub + grant XML
+
+
+async def test_odp_get_associated_documents_returns_file_uris():
+    """odp_get_associated_documents returns pgpub/grant XML locations."""
+    result = await odp_get_associated_documents(ASSOC_DOC_APP_NUM)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    rows = result.get("results", [])
+    assert rows, "Expected at least one associated-documents row"
+    grant_meta = rows[0].get("grantDocumentMetaData", {})
+    assert grant_meta.get("fileLocationURI", "").startswith(
+        "https://api.uspto.gov/api/v1/datasets/products/files/"
+    ), f"Expected a dataset file URI, got: {grant_meta}"
+
+
+async def test_odp_search_petition_decisions_by_app_num():
+    """odp_search_petition_decisions filtered by application number works."""
+    result = await odp_search_petition_decisions(app_num=PETITION_APP_NUM, limit=2)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    rows = result.get("results", [])
+    assert rows, "Expected at least one petition decision"
+    assert rows[0].get("applicationNumberText") == PETITION_APP_NUM
+
+
+async def test_odp_get_petition_decision_roundtrip():
+    """odp_get_petition_decision fetches a record found via search."""
+    search_result = await odp_search_petition_decisions(
+        app_num=PETITION_APP_NUM, limit=1
+    )
+    assert search_result.get("success") is True, f"Got: {search_result}"
+    record_id = search_result["results"][0].get("petitionDecisionRecordIdentifier")
+    assert record_id, f"Expected a record identifier, got: {search_result}"
+
+    result = await odp_get_petition_decision(record_id)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result.get("count", 0) >= 1
+
+
+async def test_odp_download_dataset_file_saves_grant_xml(tmp_path, monkeypatch):
+    """odp_download_dataset_file follows the signed redirect and saves the file."""
+    from patent_mcp_server.config import config as _config
+
+    monkeypatch.setattr(_config, "DOWNLOAD_DIR", str(tmp_path))
+
+    assoc = await odp_get_associated_documents(ASSOC_DOC_APP_NUM)
+    assert assoc.get("success") is True, f"Got: {assoc}"
+    file_uri = assoc["results"][0]["grantDocumentMetaData"]["fileLocationURI"]
+
+    result = await odp_download_dataset_file(file_uri)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    saved = Path(result["file_path"])
+    assert saved.exists() and saved.stat().st_size > 1000
+    assert saved.read_bytes()[:5] == b"<?xml"

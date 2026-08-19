@@ -3,7 +3,8 @@ USPTO PTAB API Client (Patent Trial and Appeal Board)
 
 This module provides access to the PTAB API v3 at api.uspto.gov for accessing
 Patent Trial and Appeal Board data: trial proceedings (IPR, PGR, CBM,
-derivation) and trial decisions.
+derivation), trial decisions, documents filed in trials, ex parte appeal
+decisions, and interference decisions.
 
 Note: PTAB API v3 has been migrated to the Open Data Portal (ODP).
 Requires an ODP API key obtained from https://data.uspto.gov ("My ODP").
@@ -29,6 +30,10 @@ class PTABClient:
 
     def __init__(self):
         self.base_url = f"{config.API_BASE_URL}/api/v1/patent/trials"
+        # Appeals and interferences live under their own base paths,
+        # NOT under /trials (live API layout, verified 2026-08-19).
+        self.appeals_url = f"{config.API_BASE_URL}/api/v1/patent/appeals"
+        self.interferences_url = f"{config.API_BASE_URL}/api/v1/patent/interferences"
         self.headers = {
             "User-Agent": config.USER_AGENT,
             "X-API-KEY": config.USPTO_API_KEY if config.USPTO_API_KEY else "",
@@ -48,7 +53,8 @@ class PTABClient:
         endpoint: str,
         method: str = HTTPMethods.GET,
         params: Optional[Dict[str, Any]] = None,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Make a request to the PTAB API.
 
@@ -57,11 +63,12 @@ class PTABClient:
             method: HTTP method
             params: Query parameters for GET requests
             data: JSON body for POST requests
+            base_url: Base URL override (defaults to the /trials base)
 
         Returns:
             Response JSON dictionary or error dictionary
         """
-        url = f"{self.base_url}{endpoint}"
+        url = f"{base_url or self.base_url}{endpoint}"
         logger.info(f"Making {method} request to {url}")
         return await request_json(
             self.client,
@@ -186,6 +193,142 @@ class PTABClient:
             Dictionary containing decision details
         """
         return await self._make_request(f"/decisions/{decision_id}")
+
+    async def search_documents(
+        self,
+        query: Optional[str] = None,
+        proceeding_number: Optional[str] = None,
+        offset: int = Defaults.SEARCH_START,
+        limit: int = Defaults.API_LIMIT,
+    ) -> Dict[str, Any]:
+        """Search documents filed in PTAB trial proceedings.
+
+        Args:
+            query: Free-form query or field:value clauses (ODP DSL)
+            proceeding_number: Restrict to one trial (e.g., IPR2023-00037);
+                built as a trialNumber:<value> clause
+            offset: Starting position for pagination
+            limit: Maximum results to return
+
+        Returns:
+            Dictionary containing document search results
+        """
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
+
+        q_parts = []
+        if query:
+            q_parts.append(query)
+        if proceeding_number:
+            q_parts.append(f"trialNumber:{proceeding_number}")
+        if q_parts:
+            params["q"] = " AND ".join(q_parts)
+
+        return await self._make_request("/documents/search", params=params)
+
+    async def get_proceeding_documents(self, proceeding_number: str) -> Dict[str, Any]:
+        """Get all documents filed in one PTAB proceeding.
+
+        Args:
+            proceeding_number: The proceeding number (e.g., IPR2023-00037)
+
+        Returns:
+            Dictionary containing the proceeding's documents
+        """
+        return await self._make_request(f"/{proceeding_number}/documents")
+
+    async def search_appeal_decisions(
+        self,
+        query: Optional[str] = None,
+        appeal_number: Optional[str] = None,
+        app_num: Optional[str] = None,
+        offset: int = Defaults.SEARCH_START,
+        limit: int = Defaults.API_LIMIT,
+    ) -> Dict[str, Any]:
+        """Search PTAB ex parte appeal decisions.
+
+        Args:
+            query: Free-form query or field:value clauses (ODP DSL)
+            appeal_number: Restrict to one appeal (e.g., 2026002664)
+            app_num: Restrict to one application number
+            offset: Starting position for pagination
+            limit: Maximum results to return
+
+        Returns:
+            Dictionary containing appeal decision search results
+        """
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
+
+        q_parts = []
+        if query:
+            q_parts.append(query)
+        if appeal_number:
+            q_parts.append(f"appealNumber:{appeal_number}")
+        if app_num:
+            q_parts.append(f"appellantData.applicationNumberText:{app_num}")
+        if q_parts:
+            params["q"] = " AND ".join(q_parts)
+
+        return await self._make_request(
+            "/decisions/search", params=params, base_url=self.appeals_url
+        )
+
+    async def get_appeal_decisions(self, appeal_number: str) -> Dict[str, Any]:
+        """Get decisions for one PTAB ex parte appeal.
+
+        Args:
+            appeal_number: The appeal number (e.g., 2026002664)
+
+        Returns:
+            Dictionary containing the appeal's decisions
+        """
+        return await self._make_request(
+            f"/{appeal_number}/decisions", base_url=self.appeals_url
+        )
+
+    async def search_interference_decisions(
+        self,
+        query: Optional[str] = None,
+        interference_number: Optional[str] = None,
+        offset: int = Defaults.SEARCH_START,
+        limit: int = Defaults.API_LIMIT,
+    ) -> Dict[str, Any]:
+        """Search PTAB interference decisions.
+
+        Args:
+            query: Free-form query or field:value clauses (ODP DSL)
+            interference_number: Restrict to one interference (e.g., 106130)
+            offset: Starting position for pagination
+            limit: Maximum results to return
+
+        Returns:
+            Dictionary containing interference decision search results
+        """
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
+
+        q_parts = []
+        if query:
+            q_parts.append(query)
+        if interference_number:
+            q_parts.append(f"interferenceNumber:{interference_number}")
+        if q_parts:
+            params["q"] = " AND ".join(q_parts)
+
+        return await self._make_request(
+            "/decisions/search", params=params, base_url=self.interferences_url
+        )
+
+    async def get_interference_decisions(self, interference_number: str) -> Dict[str, Any]:
+        """Get decisions for one PTAB interference.
+
+        Args:
+            interference_number: The interference number (e.g., 106130)
+
+        Returns:
+            Dictionary containing the interference's decisions
+        """
+        return await self._make_request(
+            f"/{interference_number}/decisions", base_url=self.interferences_url
+        )
 
     async def close(self):
         """Close the client connections."""

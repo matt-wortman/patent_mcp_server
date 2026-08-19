@@ -17,6 +17,12 @@ from patent_mcp_server.patents import (
     ptab_get_proceeding,
     ptab_search_decisions,
     ptab_get_decision,
+    ptab_search_trial_documents,
+    ptab_get_proceeding_documents,
+    ptab_search_appeal_decisions,
+    ptab_get_appeal_decisions,
+    ptab_search_interference_decisions,
+    ptab_get_interference_decisions,
 )
 
 pytestmark = [pytest.mark.smoke, pytest.mark.asyncio(loop_scope="session")]
@@ -69,3 +75,64 @@ async def test_ptab_get_decision_no_error():
 
     assert isinstance(result, dict), "Expected a dict response"
     assert not result.get("error"), f"Expected no error, got: {result}"
+
+
+# --- Trial documents, appeals, interferences (added v0.12.0) ------------
+
+DOCUMENTED_PROCEEDING = "IPR2023-00037"  # 88 documents as of 2026-08-19
+APPEAL_NUM = "2026002664"                # decided ex parte appeal (reexam 90019821)
+APPEAL_APP_NUM = "90019821"
+INTERFERENCE_NUM = "106130"              # decided interference, 2 decisions
+
+
+async def test_ptab_search_trial_documents_by_proceeding():
+    """ptab_search_trial_documents filtered by trial number returns results."""
+    result = await ptab_search_trial_documents(
+        proceeding_number=DOCUMENTED_PROCEEDING, limit=2
+    )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert len(result.get("results", [])) >= 1, "Expected at least one document"
+    assert result["results"][0].get("trialNumber") == DOCUMENTED_PROCEEDING
+
+
+async def test_ptab_get_proceeding_documents_returns_results():
+    """ptab_get_proceeding_documents lists the documents of one trial."""
+    result = await ptab_get_proceeding_documents(DOCUMENTED_PROCEEDING)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result.get("total", 0) >= 1, "Expected at least one document"
+
+
+async def test_ptab_search_appeal_decisions_by_app_num():
+    """ptab_search_appeal_decisions filtered by application number works."""
+    result = await ptab_search_appeal_decisions(app_num=APPEAL_APP_NUM, limit=2)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert len(result.get("results", [])) >= 1, "Expected at least one appeal decision"
+
+
+async def test_ptab_get_appeal_decisions_no_error():
+    """ptab_get_appeal_decisions returns decisions for a known appeal."""
+    result = await ptab_get_appeal_decisions(APPEAL_NUM)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result.get("total", 0) >= 1, "Expected at least one decision"
+
+
+async def test_ptab_search_interference_decisions_by_number():
+    """ptab_search_interference_decisions filtered by interference number works."""
+    result = await ptab_search_interference_decisions(
+        interference_number=INTERFERENCE_NUM, limit=2
+    )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert len(result.get("results", [])) >= 1, "Expected at least one decision"
+
+
+async def test_ptab_get_interference_decisions_no_error():
+    """ptab_get_interference_decisions returns decisions for a known interference."""
+    result = await ptab_get_interference_decisions(INTERFERENCE_NUM)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    assert result.get("total", 0) >= 1, "Expected at least one decision"
