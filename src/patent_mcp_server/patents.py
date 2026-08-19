@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import sys
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
@@ -53,8 +54,26 @@ from patent_mcp_server.uspto.dsapi_client import DsapiClient
 # bounds host memory (IR-05).
 MAX_PAGE_LIMIT = 100
 
+# Close clients inside the server's own event loop on shutdown. The atexit
+# hook below runs on a fresh loop where connection pools created here can't
+# be closed ("Event loop is closed"); it stays only as a fallback for exits
+# that never entered the lifespan.
+@asynccontextmanager
+async def _lifespan(server):
+    try:
+        yield
+    finally:
+        await cleanup()
+
+
 # Initialize FastMCP server
-mcp = FastMCP("uspto_patent_tools")
+mcp = FastMCP("uspto_patent_tools", lifespan=_lifespan)
+
+# Advertise this package's version in serverInfo.version (IR-08). FastMCP
+# doesn't expose a version parameter; without this, clients see the MCP SDK
+# version instead, which confuses telemetry.
+from patent_mcp_server.config import PACKAGE_VERSION
+mcp._mcp_server.version = PACKAGE_VERSION
 
 # Set up logging with configured level
 logging.basicConfig(
@@ -77,8 +96,16 @@ dsapi_client = DsapiClient()
 
 
 # Register cleanup handler
+_cleanup_done = False
+
+
 async def cleanup():
-    """Clean up resources on shutdown."""
+    """Clean up resources on shutdown. Safe to call more than once."""
+    global _cleanup_done
+    if _cleanup_done:
+        return
+    _cleanup_done = True
+
     logger.info("Shutting down USPTO Patent MCP server, cleaning up resources...")
     try:
         await ppubs_client.close()
