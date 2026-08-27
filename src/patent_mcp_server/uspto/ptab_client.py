@@ -93,39 +93,54 @@ class PTABClient:
     ) -> Dict[str, Any]:
         """Search PTAB trial proceedings.
 
+        Filters are compiled into the ODP DSL ``q`` parameter as
+        field:value clauses joined with " AND " — the live API silently
+        ignores bespoke query parameters (verified 2026-08-27).
+
         Args:
-            query: Full-text search query
-            trial_type: Type of trial (IPR, PGR, CBM, DER)
-            patent_number: Patent number involved in the proceeding
-            party_name: Name of petitioner or patent owner
-            filing_date_from: Filing date range start (YYYY-MM-DD)
-            filing_date_to: Filing date range end (YYYY-MM-DD)
-            status: Proceeding status
+            query: Free-form query or field:value clauses (ODP DSL)
+            trial_type: Type of trial (IPR, PGR, CBM, DER); built as a
+                trialMetaData.trialTypeCode:<value> clause
+            patent_number: Patent number involved in the proceeding;
+                built as a patentOwnerData.patentNumber:<value> clause
+            party_name: Real-party-in-interest name, matched against
+                petitioner OR patent owner (quoted phrase)
+            filing_date_from: Petition filing date range start (YYYY-MM-DD)
+            filing_date_to: Petition filing date range end (YYYY-MM-DD)
+            status: Proceeding status (e.g., Pending, Instituted,
+                Terminated, Final Written Decision); built as a
+                trialMetaData.trialStatusCategory clause
             offset: Starting position for pagination
             limit: Maximum results to return
 
         Returns:
             Dictionary containing search results
         """
-        params: Dict[str, Any] = {
-            "offset": offset,
-            "limit": limit,
-        }
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
+        q_parts = []
         if query:
-            params["q"] = query
+            q_parts.append(query)
         if trial_type and trial_type in PTABTrialTypes.ALL:
-            params["trialType"] = trial_type
+            q_parts.append(f"trialMetaData.trialTypeCode:{trial_type}")
         if patent_number:
-            params["patentNumber"] = patent_number
+            q_parts.append(f"patentOwnerData.patentNumber:{patent_number}")
         if party_name:
-            params["partyName"] = party_name
-        if filing_date_from:
-            params["filingDateFrom"] = filing_date_from
-        if filing_date_to:
-            params["filingDateTo"] = filing_date_to
+            name = party_name.replace('"', " ").strip()
+            q_parts.append(
+                f'(regularPetitionerData.realPartyInInterestName:"{name}"'
+                f' OR patentOwnerData.realPartyInInterestName:"{name}")'
+            )
+        if filing_date_from or filing_date_to:
+            q_parts.append(
+                "trialMetaData.petitionFilingDate:"
+                f"[{filing_date_from or '*'} TO {filing_date_to or '*'}]"
+            )
         if status:
-            params["status"] = status
+            status_value = status.replace('"', " ").strip()
+            q_parts.append(f'trialMetaData.trialStatusCategory:"{status_value}"')
+        if q_parts:
+            params["q"] = " AND ".join(q_parts)
 
         return await self._make_request("/proceedings/search", params=params)
 
@@ -153,13 +168,21 @@ class PTABClient:
     ) -> Dict[str, Any]:
         """Search PTAB trial decisions.
 
+        Filters are compiled into the ODP DSL ``q`` parameter as
+        field:value clauses joined with " AND " — the live API silently
+        ignores bespoke query parameters (verified 2026-08-27).
+
         Args:
-            query: Full-text search in decision documents
-            decision_type: Type of decision (institution, final, termination)
-            proceeding_number: Proceeding number
-            patent_number: Patent number
-            decision_date_from: Decision date range start (YYYY-MM-DD)
-            decision_date_to: Decision date range end (YYYY-MM-DD)
+            query: Free-form query or field:value clauses (ODP DSL)
+            decision_type: Decision type prefix (institution, final,
+                termination); built as a documentTypeDescriptionText
+                prefix-wildcard clause
+            proceeding_number: Trial number (e.g., IPR2023-00037); built
+                as a trialNumber:<value> clause
+            patent_number: Patent number; built as a
+                patentOwnerData.patentNumber:<value> clause
+            decision_date_from: Decision filing date range start (YYYY-MM-DD)
+            decision_date_to: Decision filing date range end (YYYY-MM-DD)
             offset: Starting position for pagination
             limit: Maximum results to return
 
@@ -168,18 +191,26 @@ class PTABClient:
         """
         params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
+        q_parts = []
         if query:
-            params["q"] = query
+            q_parts.append(query)
         if decision_type:
-            params["decisionType"] = decision_type
+            type_prefix = decision_type.split()[0] if decision_type.split() else ""
+            if type_prefix:
+                q_parts.append(
+                    f"documentData.documentTypeDescriptionText:{type_prefix}*"
+                )
         if proceeding_number:
-            params["proceedingNumber"] = proceeding_number
+            q_parts.append(f"trialNumber:{proceeding_number}")
         if patent_number:
-            params["patentNumber"] = patent_number
-        if decision_date_from:
-            params["decisionDateFrom"] = decision_date_from
-        if decision_date_to:
-            params["decisionDateTo"] = decision_date_to
+            q_parts.append(f"patentOwnerData.patentNumber:{patent_number}")
+        if decision_date_from or decision_date_to:
+            q_parts.append(
+                "documentData.documentFilingDate:"
+                f"[{decision_date_from or '*'} TO {decision_date_to or '*'}]"
+            )
+        if q_parts:
+            params["q"] = " AND ".join(q_parts)
 
         return await self._make_request("/decisions/search", params=params)
 

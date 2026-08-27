@@ -45,6 +45,9 @@ from patent_mcp_server.resources import (
     get_search_syntax_guide, CPC_SECTIONS
 )
 from patent_mcp_server.prompts import get_prompt
+from patent_mcp_server.uspto.cpc_scheme import (
+    CpcSchemeClient, normalize_cpc_symbol, subclass_of
+)
 from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
 from patent_mcp_server.uspto.ptab_client import PTABClient
@@ -95,6 +98,9 @@ ptab_client = PTABClient()
 # Create DSAPI client (api.uspto.gov — uses USPTO_API_KEY)
 dsapi_client = DsapiClient()
 
+# Create CPC scheme client (static scheme pages on www.uspto.gov — no key)
+cpc_scheme_client = CpcSchemeClient()
+
 
 # Register cleanup handler
 _cleanup_done = False
@@ -113,6 +119,7 @@ async def cleanup():
         await api_client.close()
         await ptab_client.close()
         await dsapi_client.close()
+        await cpc_scheme_client.close()
         logger.info("Cleanup completed successfully")
     except Exception as e:
         logger.error(f"Error during cleanup: {str(e)}")
@@ -555,16 +562,56 @@ async def get_cpc_info(cpc_code: str) -> Dict[str, Any]:
     code represents, or find related classification codes.
 
     Args:
-        cpc_code: CPC code to look up (e.g., "G06" for computing, "G06N3/08" for neural networks)
+        cpc_code: CPC code to look up (e.g., "G06" for computing,
+            "G06N3/08" for neural networks, "G01S17/32" for a full symbol)
 
     Returns:
         Classification details including section, title, and description.
-        For section codes (A-H, Y), returns subsection list.
+        For section codes (A-H, Y), returns the subsection list. For symbols
+        at subclass level or deeper (e.g. "G01S17/32"), also resolves the
+        live USPTO CPC scheme and returns "definition" (the symbol's own
+        title), "hierarchy" (the parent chain of titles from the subclass
+        down to the symbol), "subclass", and "subclass_title". Falls back
+        to the static section/subsection data when the live lookup fails.
     """
-    if len(cpc_code) == 1:
-        return get_cpc_section_info(cpc_code)
+    code = normalize_cpc_symbol(cpc_code)
+    if len(code) == 1:
+        return get_cpc_section_info(code)
+
+    static_info = get_cpc_subsection_info(code)
+
+    # Class-level codes ("G01") and shorter fragments are only resolvable
+    # from the static tables; full symbols get the live scheme lookup.
+    if subclass_of(code) is None:
+        return static_info
+
+    live = await cpc_scheme_client.lookup(code)
+    if is_error(live):
+        if "error" not in static_info:
+            static_info["note"] = (
+                "Live CPC scheme lookup failed; returning static "
+                "section/subsection data only"
+            )
+        return static_info
+
+    # Merge: keep every key the static lookup used to return (backward
+    # compatible), then add the real definition from the live scheme.
+    result: Dict[str, Any] = {}
+    if "error" not in static_info:
+        result.update(static_info)
     else:
-        return get_cpc_subsection_info(cpc_code)
+        section = code[0]
+        result["code"] = code
+        result["section"] = section
+        if section in CPC_SECTIONS:
+            result["section_title"] = CPC_SECTIONS[section]["title"]
+
+    result["subclass"] = live["subclass"]
+    result["subclass_title"] = live["subclass_title"]
+    result["definition"] = live["definition"]
+    result["hierarchy"] = live["hierarchy"]
+    result["source"] = "USPTO CPC scheme (www.uspto.gov)"
+    return result
 
 
 @mcp.tool()
@@ -610,10 +657,16 @@ async def ppubs_search_patents(
                Examples:
                - "machine learning" - searches all fields
                - "neural network".ttl. - title contains phrase
-               - Smith.in. AND IBM.an. - inventor Smith, assignee IBM
+               - Smith.in. AND IBM.as. - inventor Smith, assignee IBM
+               - Raytheon.aanm. - applicant name
                - G06N3/08.cpc. - CPC classification
                - (Sonata AND Jodele).in. - boolean combination in inventor field
-        offset: Starting position for pagination (default: 0)
+               Note on assignee searches: the PPUBS index for assignee
+               name is .as. (the legacy PatFT code .an. has no index here
+               and would match nothing, so this tool automatically
+               rewrites .an. to .as. before searching).
+        offset: Starting position for pagination (default: 0). Pagination
+                advances by family group, not by individual document.
         limit: Maximum results to return (default: 100, max: 500)
         sort: Sort order (default: "score desc" = relevance, best matches
               first). Use "date_publ desc" for newest-first ordering —
@@ -623,6 +676,11 @@ async def ppubs_search_patents(
     Returns:
         Normalized response with patent results including GUID, title,
         abstract, dates, inventors, and classification codes.
+        In the envelope, "count" is the number of documents in this page
+        of results, and "total" is the number of documents matching the
+        query across the whole collection. Results are grouped by patent
+        family, so one page can hold slightly more documents than the
+        requested page size when a family has several members.
     """
     result = await ppubs_client.run_query(
         query=query,
@@ -654,13 +712,17 @@ async def ppubs_search_applications(
     Args:
         query: Search query using BRS syntax (same as ppubs_search_patents).
                Format: term.field_code. (e.g., "neural network".ttl.)
+               Assignee name is .as. (the legacy .an. code is rewritten
+               to .as. automatically); applicant name is .aanm.
         offset: Starting position for pagination (default: 0)
         limit: Maximum results to return (default: 100, max: 500)
         sort: Sort order (default: "score desc" = relevance, best matches
               first). Use "date_publ desc" for newest-first ordering.
 
     Returns:
-        Normalized response with application results.
+        Normalized response with application results. "count" is the
+        number of documents in this page; "total" is the number of
+        documents matching the query across the whole collection.
     """
     result = await ppubs_client.run_query(
         query=query,
@@ -1435,13 +1497,15 @@ async def ptab_search_proceedings(
     - DER: Derivation proceedings
 
     Args:
-        query: Full-text search query
+        query: Free-form query or field:value clauses (ODP DSL)
         trial_type: Type of trial (IPR, PGR, CBM, DER)
         patent_number: Patent number being challenged
-        party_name: Petitioner or patent owner name
-        filing_date_from: Filing date range start (YYYY-MM-DD)
-        filing_date_to: Filing date range end (YYYY-MM-DD)
-        status: Proceeding status (Pending, Instituted, Terminated, FWD Entered)
+        party_name: Real-party-in-interest name, matched against
+            petitioner or patent owner
+        filing_date_from: Petition filing date range start (YYYY-MM-DD)
+        filing_date_to: Petition filing date range end (YYYY-MM-DD)
+        status: Proceeding status (e.g., Pending, Instituted, Terminated,
+            Final Written Decision)
         offset: Starting position (default: 0)
         limit: Max results (default: 25, max: 100)
 
@@ -1507,12 +1571,13 @@ async def ptab_search_decisions(
     written decisions, or termination orders.
 
     Args:
-        query: Full-text search in decision text
-        decision_type: Type (institution, final, termination)
-        proceeding_number: Filter by proceeding number
+        query: Free-form query or field:value clauses (ODP DSL)
+        decision_type: Decision type prefix (institution, final,
+            termination) matched against the document type description
+        proceeding_number: Filter by trial number (e.g., IPR2023-00037)
         patent_number: Filter by patent number
-        decision_date_from: Date range start (YYYY-MM-DD)
-        decision_date_to: Date range end (YYYY-MM-DD)
+        decision_date_from: Decision filing date range start (YYYY-MM-DD)
+        decision_date_to: Decision filing date range end (YYYY-MM-DD)
         offset: Starting position (default: 0)
         limit: Max results (default: 25, max: 100)
     """

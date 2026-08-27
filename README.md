@@ -270,7 +270,14 @@ uv sync --dev
 
 ## Version History
 
-### v0.12.0 (Current)
+### v0.13.0 (Current)
+- Fixed PTAB search filters that were silently ignored: `ptab_search_proceedings` and `ptab_search_decisions` sent parameter names USPTO's API does not recognize, so every "filtered" search returned the entire corpus (19,357 proceedings). Both now build ODP DSL `q` clauses from live-verified field names (`patentOwnerData.patentNumber`, `trialMetaData.trialTypeCode`, `trialMetaData.trialStatusCategory`, petition/decision filing-date ranges, real-party-in-interest names on either side)
+- Fixed PPUBS assignee searches returning zero results: the backend has no `AN` index — its assignee-name index is `AS`. Queries using `.an.` are now auto-translated to `.as.`
+- Fixed PPUBS totals: `numFound` from the search endpoint is the per-page family-group count, not the match total; the envelope's `total` now comes from the count service's true document total (`Marron.in.` reported total 1, now 207)
+- `get_cpc_info` now resolves full CPC symbols to their real definitions with the complete parent-title chain, fetched from USPTO's official CPC scheme pages (cached per subclass, static section/class data kept as offline fallback)
+- New unit tests for all three fixes (PTAB query construction, PPUBS query rewriting/totals, CPC scheme parsing); PTAB smoke test now uses a patent that actually has PTAB proceedings (11570034 — the old choice 10000000 has none and only "passed" because filters were ignored)
+
+### v0.12.0
 - Full parity with USPTO's ODP API catalog (patents side): 10 new tools, all live-verified
 - PTAB trial filing history: `ptab_search_trial_documents`, `ptab_get_proceeding_documents`
 - PTAB ex parte appeals: `ptab_search_appeal_decisions`, `ptab_get_appeal_decisions`

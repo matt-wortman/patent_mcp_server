@@ -7,6 +7,7 @@ which provides full text patent documents, patent PDFs, and advanced search capa
 
 import copy
 import json
+import re
 import asyncio
 from typing import Any, Optional, Dict, List, Union
 from datetime import datetime, timedelta
@@ -25,6 +26,62 @@ from patent_mcp_server.constants import (
 
 # Set up logging
 logger = logging.getLogger('ppubs_uspto_gov')
+
+
+# BRS field-code aliases rewritten before a query is sent upstream.
+#
+# The Patent Public Search backend has no "AN" index: its assignee-name
+# index is "AS" (live-verified 2026-08-27 against /api/searches/counts:
+# Raytheon.an. -> 0 results, Raytheon.as. -> 11,725 results in USPAT).
+# Users coming from legacy PatFT syntax write ".an." for assignee, so
+# translate it instead of silently returning zero results.
+FIELD_CODE_ALIASES = {
+    "an": "as",  # assignee name: legacy PatFT code -> PPUBS index
+}
+
+_ALIAS_PATTERN = re.compile(
+    r"\.(" + "|".join(FIELD_CODE_ALIASES) + r")\.",
+    re.IGNORECASE,
+)
+
+
+def rewrite_field_aliases(query: str) -> str:
+    """Translate legacy BRS field codes to the indexes PPUBS actually has.
+
+    Only text outside double-quoted phrases is rewritten, so a quoted
+    phrase that happens to contain ".an." is left untouched. Field codes
+    are matched case-insensitively (BRS treats them that way).
+    """
+    parts = query.split('"')
+    # Even indexes are outside quotes; odd indexes are inside them.
+    for i in range(0, len(parts), 2):
+        parts[i] = _ALIAS_PATTERN.sub(
+            lambda m: "." + FIELD_CODE_ALIASES[m.group(1).lower()] + ".",
+            parts[i],
+        )
+    return '"'.join(parts)
+
+
+def resolve_search_total(
+    search_result: Dict[str, Any],
+    counts_total: Optional[int],
+) -> int:
+    """Pick the query-wide document total for a search response.
+
+    The searchWithBeFamily response's own "numFound" is NOT the query
+    total — it is the number of family groups on the returned page
+    (live-verified 2026-08-27: Marron.in. with pageCount=20 returned
+    numFound=20 and 21 patents, while numberOfFamilies=176 and the
+    /api/searches/counts endpoint reported numResults=207). The true
+    document total therefore comes from the counts endpoint; the
+    query-wide family count is the fallback when counts is unavailable.
+    """
+    if isinstance(counts_total, int):
+        return counts_total
+    families = search_result.get("numberOfFamilies")
+    if isinstance(families, int):
+        return families
+    return search_result.get("numFound") or 0
 
 
 class PpubsClient:
@@ -268,6 +325,13 @@ class PpubsClient:
     ) -> Dict[str, Any]:
         """Run a search query against USPTO Public Search.
 
+        Legacy field codes with no PPUBS index are rewritten first (see
+        FIELD_CODE_ALIASES; e.g. ".an." becomes ".as."). The returned
+        dict's "numFound" is the query-wide document total (taken from
+        the counts endpoint, falling back to the query-wide family
+        count); the raw per-page family-group count the search endpoint
+        reported as "numFound" is preserved as "familiesOnPage".
+
         Args:
             query: Search query string
             start: Starting position for results
@@ -284,6 +348,11 @@ class PpubsClient:
         # Default sources
         if sources is None:
             sources = [Sources.PUBLISHED_APPLICATIONS, Sources.GRANTED_PATENTS, Sources.OCR]
+
+        # Translate legacy field codes (e.g. ".an." -> ".as.") to the
+        # indexes this backend actually has, so assignee queries do not
+        # silently return zero results.
+        query = rewrite_field_aliases(query)
 
         # Ensure we have a session
         case_id = await self._ensure_case_id()
@@ -310,7 +379,9 @@ class PpubsClient:
         data["query"]["plurals"] = expand_plurals
         data["query"]["britishEquivalents"] = british_equivalents
 
-        # Get counts first
+        # Get counts first. This is the only endpoint that reports the
+        # query-wide document total ("numResults"); the search endpoint's
+        # "numFound" only counts family groups on the returned page.
         logger.info("Getting search counts")
         counts_url = f"{config.PPUBS_BASE_URL}/api/searches/counts"
         counts_response = await self.make_request(HTTPMethods.POST, counts_url, json=data["query"])
@@ -318,6 +389,13 @@ class PpubsClient:
         # make_request returns a dict only for errors
         if isinstance(counts_response, dict):
             return counts_response
+
+        counts_total: Optional[int] = None
+        if counts_response.status_code == 200:
+            try:
+                counts_total = counts_response.json().get("numResults")
+            except ValueError:
+                counts_total = None
 
         # Execute search
         logger.info("Executing search query")
@@ -343,6 +421,13 @@ class PpubsClient:
                 message=error_obj.get(Fields.ERROR_MESSAGE, "Unknown error"),
                 error_code=error_obj.get(Fields.ERROR_CODE)
             )
+
+        # The raw "numFound" is the number of family groups on this page,
+        # which downstream normalization would misreport as the query
+        # total. Preserve it under an honest name and replace "numFound"
+        # with the query-wide document total.
+        result["familiesOnPage"] = result.get("numFound")
+        result["numFound"] = resolve_search_total(result, counts_total)
 
         # Log search results for debugging (guarded: serializing the full
         # result is expensive, so only pay for it when DEBUG is actually on)

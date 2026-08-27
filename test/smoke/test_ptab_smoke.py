@@ -27,7 +27,10 @@ from patent_mcp_server.patents import (
 
 pytestmark = [pytest.mark.smoke, pytest.mark.asyncio(loop_scope="session")]
 
-PATENT_NUM = "10000000"
+# Patent 11570034 has a real PTAB record (IPR2025-00913: 1 proceeding,
+# 3 decisions as of 2026-08-27); 10000000 has none — it only "worked"
+# while the old client sent filters the API silently ignored.
+PATENT_NUM = "11570034"
 PROCEEDING_NUM = "IPR2026-00338"
 
 
