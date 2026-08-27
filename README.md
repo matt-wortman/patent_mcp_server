@@ -270,7 +270,17 @@ uv sync --dev
 
 ## Version History
 
-### v0.11.1 (Current)
+### v0.12.0 (Current)
+- Full parity with USPTO's ODP API catalog (patents side): 10 new tools, all live-verified
+- PTAB trial filing history: `ptab_search_trial_documents`, `ptab_get_proceeding_documents`
+- PTAB ex parte appeals: `ptab_search_appeal_decisions`, `ptab_get_appeal_decisions`
+- PTAB interferences: `ptab_search_interference_decisions`, `ptab_get_interference_decisions`
+- ODP Final Petition Decisions: `odp_search_petition_decisions`, `odp_get_petition_decision`
+- ODP published-document (pgpub/grant XML) metadata: `odp_get_associated_documents`; bulk dataset file download: `odp_download_dataset_file`
+- Fixed two speculative PTAB response-bag keys to the live names (`patentAppealDataBag`, `patentInterferenceDataBag`); `from_odp` now recognizes `petitionDecisionDataBag`
+- Added a USPTO API drift checker (`scripts/check_uspto_api_coverage.py`) with a weekly GitHub Action that opens an issue when USPTO adds or removes endpoints
+
+### v0.11.1
 - PPUBS search tools now default to relevance ordering (`sort="score desc"`) instead of newest-first (`date_publ desc`), which buried the best matches under whatever was granted most recently; pass `sort="date_publ desc"` for the old behavior
 
 ### v0.11.0
