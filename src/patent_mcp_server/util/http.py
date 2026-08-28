@@ -9,7 +9,8 @@ and 4 requests/minute for PDF/ZIP downloads.
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Set, Tuple, Union
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from tenacity import (
@@ -32,6 +33,13 @@ MAX_RATE_LIMIT_SLEEP = 60.0
 # Cap error bodies copied into logs and error dicts. Upstream HTML error
 # pages can be hundreds of KB; the first KB carries the useful part.
 MAX_ERROR_BODY_CHARS = 1000
+MAX_DOWNLOAD_REDIRECTS = 5
+SENSITIVE_REDIRECT_HEADERS = (
+    "Authorization",
+    "Proxy-Authorization",
+    "X-API-KEY",
+    "X-Access-Token",
+)
 
 # The single network-retry policy shared by every USPTO client, including
 # the PPUBS client's own make_request.
@@ -108,6 +116,8 @@ async def _send(
     form_data: Optional[Dict[str, Any]] = None,
     headers: Optional[Dict[str, str]] = None,
     context: str = "Request failed",
+    follow_redirects: Optional[bool] = None,
+    accept_redirect_response: bool = False,
 ) -> Union[httpx.Response, Dict[str, Any]]:
     """Send one request with retry, 429 handling, and standard error mapping.
 
@@ -121,6 +131,11 @@ async def _send(
     try:
         attempt = 0
         while True:
+            redirect_option = (
+                {"follow_redirects": follow_redirects}
+                if follow_redirects is not None
+                else {}
+            )
             response = await client.request(
                 method,
                 url,
@@ -129,17 +144,23 @@ async def _send(
                 data=form_data,
                 headers=headers,
                 timeout=config.REQUEST_TIMEOUT,
+                **redirect_option,
             )
             if response.status_code != 429:
                 break
             if attempt >= config.MAX_RETRIES:
-                logger.error(f"Rate limit (429) persisted after {config.MAX_RETRIES} retries: {url}")
+                logger.error(
+                    f"Rate limit (429) persisted after {config.MAX_RETRIES} "
+                    f"retries: {url}"
+                )
                 return rate_limit_error()
             delay = rate_limit_delay(response, attempt)
             logger.warning(f"Rate limited (429) on {url}; retrying in {delay:.0f}s")
             await asyncio.sleep(delay)
             attempt += 1
 
+        if accept_redirect_response and response.is_redirect:
+            return response
         response.raise_for_status()
         return response
 
@@ -217,6 +238,7 @@ async def request_bytes(
     *,
     headers: Optional[Dict[str, str]] = None,
     context: str = "Download failed",
+    allowed_redirect_hosts: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Download binary content (PDFs, DOCX) with the same retry/429 handling.
 
@@ -224,9 +246,58 @@ async def request_bytes(
         Dict with 'content' (bytes), 'content_type', and 'size_bytes' on
         success, or an ApiError dictionary on failure.
     """
-    result = await _send(client, HTTPMethods.GET, url, headers=headers, context=context)
-    if isinstance(result, dict):
-        return result
+    current_url = url
+    current_headers = dict(client.headers)
+    if headers:
+        current_headers.update(headers)
+    initial_host = urlparse(url).hostname
+    allowed_hosts = set(allowed_redirect_hosts or ())
+    if initial_host:
+        allowed_hosts.add(initial_host)
+
+    for redirect_count in range(MAX_DOWNLOAD_REDIRECTS + 1):
+        result = await _send(
+            client,
+            HTTPMethods.GET,
+            current_url,
+            headers=current_headers,
+            context=context,
+            follow_redirects=False,
+            accept_redirect_response=True,
+        )
+        if isinstance(result, dict):
+            return result
+
+        if not result.is_redirect:
+            break
+        if redirect_count >= MAX_DOWNLOAD_REDIRECTS:
+            return ApiError.create(
+                "USPTO download exceeded the redirect limit",
+                error_code="TOO_MANY_REDIRECTS",
+            )
+        location = result.headers.get("location")
+        if not location:
+            return ApiError.create(
+                "USPTO download redirect did not include a location",
+                error_code="INVALID_REDIRECT",
+            )
+        try:
+            current_url, current_headers = prepare_safe_redirect(
+                current_url,
+                location,
+                current_headers,
+                allowed_hosts=allowed_hosts,
+            )
+        except ValueError as exc:
+            return ApiError.create(
+                str(exc),
+                error_code="UNSAFE_REDIRECT",
+            )
+    else:  # pragma: no cover - loop always breaks or returns
+        return ApiError.create(
+            "USPTO download redirect handling failed",
+            error_code="INVALID_REDIRECT",
+        )
 
     content = result.content
     content_type = result.headers.get("content-type", "application/octet-stream")
@@ -236,3 +307,30 @@ async def request_bytes(
         "content_type": content_type,
         "size_bytes": len(content),
     }
+
+
+def prepare_safe_redirect(
+    current_url: str,
+    location: str,
+    headers: Dict[str, str],
+    *,
+    allowed_hosts: Set[str],
+) -> Tuple[str, Dict[str, str]]:
+    """Validate a download redirect and strip credentials cross-origin."""
+    next_url = urljoin(current_url, location)
+    current = urlparse(current_url)
+    target = urlparse(next_url)
+    if target.scheme != "https" or target.username or target.password:
+        raise ValueError("USPTO download redirect must use credential-free HTTPS")
+    if target.hostname not in allowed_hosts or target.port not in (None, 443):
+        raise ValueError("USPTO download redirect used an unapproved host")
+
+    next_headers = dict(headers)
+    if (current.scheme, current.netloc) != (target.scheme, target.netloc):
+        sensitive_names = {header.lower() for header in SENSITIVE_REDIRECT_HEADERS}
+        for header in list(next_headers):
+            if header.lower() in sensitive_names:
+                next_headers.pop(header)
+        for header in SENSITIVE_REDIRECT_HEADERS:
+            next_headers[header] = ""
+    return next_url, next_headers

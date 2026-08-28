@@ -23,6 +23,7 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, Union
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from patent_mcp_server.config import config
@@ -50,6 +51,12 @@ from patent_mcp_server.uspto.cpc_scheme import (
 )
 from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
+from patent_mcp_server.uspto.document_download import (
+    SUPPORTED_PREFERENCES,
+    rank_download_options,
+    resolve_advertised_download_url,
+    save_downloaded_document,
+)
 from patent_mcp_server.uspto.ptab_client import PTABClient
 from patent_mcp_server.uspto.dsapi_client import DsapiClient
 
@@ -70,8 +77,22 @@ async def _lifespan(server):
         await cleanup()
 
 
-# Initialize FastMCP server
-mcp = FastMCP("uspto_patent_tools", lifespan=_lifespan)
+# Initialize FastMCP server. These instructions are sent during MCP
+# initialization, so every client receives the native-text-first policy even
+# when it does not use one of the server's optional workflow prompts.
+mcp = FastMCP(
+    "uspto_patent_tools",
+    instructions=(
+        "Prefer structured USPTO JSON or XML and native Word documents when "
+        "reading text. For application file-wrapper documents, use "
+        "odp_download_document with its default AUTO preference; it tries XML, "
+        "then MS Word, and uses PDF only when no native representation works. "
+        "Use ppubs_get_full_document or ppubs_get_patent_by_number for patent "
+        "text before requesting a PDF. Use PDF/OCR only for PDF-only records, "
+        "when layout or images matter, or when the user explicitly requests it."
+    ),
+    lifespan=_lifespan,
+)
 
 # Advertise this package's version in serverInfo.version (IR-08). FastMCP
 # doesn't expose a version parameter; without this, clients see the MCP SDK
@@ -797,7 +818,10 @@ async def ppubs_get_patent_by_number(patent_number: str) -> Dict[str, Any]:
 async def ppubs_download_patent_pdf(patent_number: str) -> Dict[str, Any]:
     """Download a patent as PDF. Saves to disk and returns file path.
 
-    USE THIS TOOL WHEN: You need the official PDF document of a patent.
+    USE THIS TOOL WHEN: You need the official visual PDF, including layout or
+    drawings, or the structured full-text tools could not supply needed text.
+    For text analysis, prefer ppubs_get_full_document or
+    ppubs_get_patent_by_number so OCR is not required.
     The PDF is written to the configured download directory; the caller
     reads it from disk rather than receiving bytes inline.
 
@@ -1032,6 +1056,10 @@ async def odp_get_transactions(app_num: str) -> Dict[str, Any]:
 async def odp_get_documents(app_num: str) -> Dict[str, Any]:
     """Get list of documents in the application file wrapper.
 
+    WORKFLOW: Use the returned documentIdentifier with odp_download_document.
+    That tool automatically prefers XML, then MS Word, and falls back to PDF
+    only when no native-text representation works.
+
     Args:
         app_num: Application number without slashes (e.g., "14412875")
     """
@@ -1079,29 +1107,36 @@ async def odp_get_associated_documents(app_num: str) -> Dict[str, Any]:
 async def odp_download_document(
     app_num: str,
     document_id: str,
+    preferred_format: str = "AUTO",
 ) -> Dict[str, Any]:
-    """Download a document from the application file wrapper as PDF.
+    """Download a file-wrapper document, preferring native text over PDF.
 
     USE THIS TOOL WHEN: You need to read the actual content of a file
     wrapper document such as an office action, examiner interview summary,
     list of references cited (892 form), claims, specification, or any
     other document listed by odp_get_documents.
 
-    WORKFLOW: First call odp_get_documents to list available documents and
-    get document identifiers, then call this tool with the desired
-    document_id to download and save the PDF.
+    DEFAULT POLICY: XML first, then MS Word, then PDF only when no native
+    format works. USPTO XML archives are safely unpacked and file_path points
+    directly to readable XML. A failed preferred download automatically falls
+    back to the next advertised format.
+
+    WORKFLOW: First call odp_get_documents to identify the desired document,
+    then call this tool with its document_id. Usually leave preferred_format
+    as AUTO. Set XML, MS_WORD, or PDF only when a specific representation is
+    useful; the remaining formats still act as fallbacks.
 
     Args:
         app_num: Application number without slashes (e.g., "18533474")
         document_id: Document identifier from odp_get_documents response
             (e.g., "MM26RN3L138X163")
+        preferred_format: AUTO (default), XML, MS_WORD, or PDF.
 
     Returns:
-        Dictionary with file_path to the saved PDF on success.
-        The caller can then read the PDF using standard file reading.
+        Dictionary with file_path, selected_format, and fallback details.
+        Native XML and Word paths should be read directly. PDF means no
+        usable native-text representation was available or preferred.
     """
-    import os
-
     try:
         app_num = validate_app_number(str(app_num))
     except ValueError as e:
@@ -1113,31 +1148,127 @@ async def odp_download_document(
         )
 
     document_id = document_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,128}", document_id):
+        return ApiError.validation_error(
+            "document_id must contain only letters, digits, and hyphens",
+            "document_id",
+        )
+    preferred_format = str(preferred_format).strip().upper()
+    if preferred_format not in SUPPORTED_PREFERENCES:
+        return ApiError.validation_error(
+            "preferred_format must be AUTO, XML, MS_WORD, or PDF",
+            "preferred_format",
+        )
 
-    url = f"{config.API_BASE_URL}/api/v1/download/applications/{app_num}/{document_id}.pdf"
-    result = await api_client.download_file(url)
+    documents_url = (
+        f"{config.API_BASE_URL}/api/v1/patent/applications/{app_num}/documents"
+    )
+    listing = await api_client.make_request(documents_url)
+    if is_error(listing):
+        return listing
 
-    if is_error(result):
-        return result
+    document_bag = listing.get("documentBag", [])
+    if not isinstance(document_bag, list) or any(
+        not isinstance(item, dict) for item in document_bag
+    ):
+        return ApiError.create(
+            "USPTO document listing contained an invalid documentBag",
+            error_code="INVALID_UPSTREAM_RESPONSE",
+        )
 
-    # Save to configured download directory
-    download_dir = config.DOWNLOAD_DIR
-    os.makedirs(download_dir, exist_ok=True)
+    document = next(
+        (
+            item
+            for item in document_bag
+            if item.get("documentIdentifier") == document_id
+        ),
+        None,
+    )
+    if document is None:
+        return ApiError.not_found("File-wrapper document", document_id)
 
-    filename = f"{app_num}_{document_id}.pdf"
-    file_path = os.path.join(download_dir, filename)
+    advertised_options = document.get("downloadOptionBag", [])
+    if not isinstance(advertised_options, list) or any(
+        not isinstance(item, dict) for item in advertised_options
+    ):
+        return ApiError.create(
+            "USPTO document listing contained an invalid downloadOptionBag",
+            error_code="INVALID_UPSTREAM_RESPONSE",
+        )
+    options = rank_download_options(advertised_options, preferred_format)
+    if not options:
+        return ApiError.create(
+            f"File-wrapper document {document_id} has no supported download format",
+            error_code="NO_SUPPORTED_FORMAT",
+        )
 
-    with open(file_path, "wb") as f:
-        f.write(result["content"])
+    attempts = []
+    attempt_errors = []
+    for option in options:
+        format_name = option["mimeTypeIdentifier"]
+        attempts.append(format_name)
+        try:
+            url = resolve_advertised_download_url(
+                option["downloadUrl"],
+                config.API_BASE_URL,
+                app_num,
+                document_id,
+            )
+        except ValueError as exc:
+            attempt_errors.append({"format": format_name, "message": str(exc)})
+            continue
 
-    return {
-        "success": True,
-        "file_path": file_path,
-        "size_bytes": result["size_bytes"],
-        "content_type": result["content_type"],
-        "document_id": document_id,
-        "application_number": app_num,
-    }
+        try:
+            result = await api_client.download_file(url)
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            attempt_errors.append({"format": format_name, "message": str(exc)})
+            continue
+        if is_error(result):
+            attempt_errors.append(
+                {"format": format_name, "message": result.get("message", "download failed")}
+            )
+            continue
+
+        try:
+            saved = save_downloaded_document(
+                result["content"],
+                format_name,
+                option["downloadUrl"],
+                config.DOWNLOAD_DIR,
+                app_num,
+                document_id,
+            )
+        except (OSError, ValueError) as exc:
+            attempt_errors.append({"format": format_name, "message": str(exc)})
+            continue
+
+        return {
+            "success": True,
+            "file_path": saved["file_path"],
+            "extracted_file_paths": saved["extracted_file_paths"],
+            "size_bytes": result["size_bytes"],
+            "content_type": result["content_type"],
+            "selected_format": format_name,
+            "available_formats": sorted(
+                {
+                    item.get("mimeTypeIdentifier")
+                    for item in advertised_options
+                    if item.get("mimeTypeIdentifier") in SUPPORTED_PREFERENCES
+                    and item.get("mimeTypeIdentifier") != "AUTO"
+                }
+            ),
+            "attempted_formats": attempts,
+            "fallback_used": len(attempts) > 1,
+            "ocr_may_be_required": format_name == "PDF",
+            "document_id": document_id,
+            "application_number": app_num,
+        }
+
+    return ApiError.create(
+        f"All advertised formats failed for file-wrapper document {document_id}",
+        error_code="DOCUMENT_DOWNLOAD_FAILED",
+        details={"attempts": attempt_errors},
+    )
 
 
 @mcp.tool()

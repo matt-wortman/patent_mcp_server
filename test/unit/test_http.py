@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from patent_mcp_server.constants import Defaults
+from patent_mcp_server.util import http as http_utils
 from patent_mcp_server.util.http import rate_limit_delay, MAX_RATE_LIMIT_SLEEP
 
 
@@ -47,3 +48,40 @@ class TestRateLimitDelay:
     def test_default_delay_is_clamped_to_cap(self):
         # A huge attempt count must not produce an unbounded sleep either
         assert rate_limit_delay(_response(), attempt=1000) == MAX_RATE_LIMIT_SLEEP
+
+
+@pytest.mark.unit
+def test_cross_origin_redirect_strips_api_credentials():
+    """A signed USPTO redirect must not forward credentials to another host."""
+    next_url, headers = http_utils.prepare_safe_redirect(
+        "https://api.uspto.gov/download/file",
+        "https://data-documents.uspto.gov/signed/file",
+        {
+            "x-api-key": "secret-key",
+            "Authorization": "Bearer secret-token",
+            "User-Agent": "test-agent",
+        },
+        allowed_hosts={"api.uspto.gov", "data-documents.uspto.gov"},
+    )
+
+    assert next_url == "https://data-documents.uspto.gov/signed/file"
+    assert "secret-key" not in headers.values()
+    assert "Bearer secret-token" not in headers.values()
+    assert headers["X-API-KEY"] == ""
+    assert headers["Authorization"] == ""
+    assert headers["User-Agent"] == "test-agent"
+    with httpx.Client(headers={"X-API-KEY": "client-default-secret"}) as client:
+        redirected_request = client.build_request("GET", next_url, headers=headers)
+    assert redirected_request.headers["X-API-KEY"] == ""
+
+
+@pytest.mark.unit
+def test_redirect_to_unapproved_host_is_rejected():
+    """A compromised USPTO redirect must not create an SSRF request."""
+    with pytest.raises(ValueError, match="unapproved host"):
+        http_utils.prepare_safe_redirect(
+            "https://api.uspto.gov/download/file",
+            "https://evil.example.com/collect",
+            {"X-API-KEY": "secret-key"},
+            allowed_hosts={"api.uspto.gov", "data-documents.uspto.gov"},
+        )

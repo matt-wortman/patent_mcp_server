@@ -50,14 +50,23 @@ def _load_oversized_response(result):
     return result
 
 
-def _first_document_id(result):
-    """Extract a stable document identifier from odp_get_documents output."""
+def _first_document_id_with_format(result, format_name):
+    """Find a stable document that advertises the requested native format."""
     full_result = _load_oversized_response(result)
     results_payload = full_result.get("results", {})
-    document_bag = results_payload.get("documentBag", []) if isinstance(results_payload, dict) else []
-    if not document_bag:
-        return None
-    return document_bag[0].get("documentIdentifier")
+    document_bag = (
+        results_payload.get("documentBag", [])
+        if isinstance(results_payload, dict)
+        else []
+    )
+    for document in document_bag:
+        formats = {
+            option.get("mimeTypeIdentifier")
+            for option in document.get("downloadOptionBag", [])
+        }
+        if format_name in formats:
+            return document.get("documentIdentifier")
+    return None
 
 
 def _first_dataset_id(result):
@@ -154,25 +163,27 @@ async def test_odp_get_documents_no_error():
     assert "results" in result, f"Expected 'results' key in response, got keys: {list(result.keys())}"
 
 
-async def test_odp_download_document_returns_pdf_on_disk():
-    """odp_download_document downloads a real file wrapper document to disk."""
+async def test_odp_download_document_prefers_native_xml_on_disk():
+    """odp_download_document extracts native XML instead of downloading PDF."""
     result = await odp_get_documents(app_num=APP_NUM)
     assert not result.get("error"), f"Expected no error from odp_get_documents, got: {result}"
 
-    document_id = _first_document_id(result)
-    assert document_id, f"Expected a document identifier in odp_get_documents payload, got: {result}"
+    document_id = _first_document_id_with_format(result, "XML")
+    assert document_id, f"Expected a document with native XML, got: {result}"
 
     download = await odp_download_document(app_num=APP_NUM, document_id=document_id)
 
     assert download.get("success") is True, f"Expected success, got: {download}"
-    assert download.get("content_type") in {"application/pdf", "application/octet-stream"}, (
-        f"Expected PDF-like content type, got: {download.get('content_type')}"
+    assert download.get("selected_format") == "XML", (
+        f"Expected native XML selection, got: {download}"
     )
+    assert download.get("ocr_may_be_required") is False
     file_path = download.get("file_path")
     assert file_path and os.path.isfile(file_path), (
         f"Expected file_path to exist on disk, got: {file_path}"
     )
-    assert os.path.getsize(file_path) > 1000, "Expected non-trivial file on disk"
+    assert file_path.lower().endswith(".xml"), f"Expected extracted XML path, got: {file_path}"
+    assert os.path.getsize(file_path) > 1000, "Expected non-trivial XML on disk"
 
 
 async def test_odp_search_datasets_returns_results():

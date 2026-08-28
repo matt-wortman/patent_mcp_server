@@ -5,6 +5,18 @@ Prompts provide reusable workflow templates for common patent research tasks.
 Users can access these via / commands.
 """
 
+NATIVE_TEXT_RETRIEVAL_POLICY = """
+## Document Retrieval Policy
+
+- Prefer structured USPTO JSON/XML or native Word content for text analysis.
+- For file-wrapper documents, call odp_download_document with its default AUTO
+  preference; it tries XML, then MS Word, and falls back to PDF only when needed.
+- For published patents and applications, use ppubs_get_full_document or
+  ppubs_get_patent_by_number before requesting a PDF.
+- Use PDF/OCR only for PDF-only records, when visual layout or drawings matter,
+  or when the user explicitly requests the official PDF.
+"""
+
 PRIOR_ART_SEARCH_PROMPT = """
 # Prior Art Search Workflow
 
@@ -454,7 +466,11 @@ PROMPTS = {
 def get_prompt(name: str) -> dict:
     """Get a prompt by name."""
     if name in PROMPTS:
-        return PROMPTS[name]
+        prompt = PROMPTS[name]
+        return {
+            **prompt,
+            "content": f"{prompt['content'].rstrip()}\n{NATIVE_TEXT_RETRIEVAL_POLICY}",
+        }
     return {"error": f"Unknown prompt: {name}"}
 
 

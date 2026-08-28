@@ -156,6 +156,15 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 
 ## Available Tools
 
+### Document retrieval policy
+
+For text analysis, the server prefers structured USPTO data and native document
+formats so OCR is avoided. `odp_download_document` defaults to XML, then MS Word,
+and falls back to PDF only when no native format works. For published patents
+and applications, use `ppubs_get_full_document` or
+`ppubs_get_patent_by_number` before requesting a PDF; use PDF when the official
+visual layout or drawings matter.
+
 ### Utility Tools
 | Tool | Description |
 |------|-------------|
@@ -170,7 +179,7 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 | `ppubs_search_applications` | Search published patent applications |
 | `ppubs_get_full_document` | Get full patent document by GUID |
 | `ppubs_get_patent_by_number` | Get patent's full text by number |
-| `ppubs_download_patent_pdf` | Download patent as PDF |
+| `ppubs_download_patent_pdf` | Download the official visual PDF when structured text is insufficient |
 
 ### Open Data Portal (api.uspto.gov)
 | Tool | Description |
@@ -184,9 +193,9 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 | `odp_get_attorney` | Get attorney/agent of record |
 | `odp_get_foreign_priority` | Get foreign priority claims |
 | `odp_get_transactions` | Get prosecution transaction history |
-| `odp_get_documents` | Get file wrapper documents |
+| `odp_get_documents` | List file wrapper documents and their available formats |
 | `odp_get_associated_documents` | Get pgpub/grant XML publication metadata |
-| `odp_download_document` | Download a file wrapper document (PDF) to disk |
+| `odp_download_document` | Download XML, Word, or PDF using native-text-first fallback |
 | `odp_search_datasets` | Search bulk data products |
 | `odp_get_dataset` | Get dataset product details |
 | `odp_download_dataset_file` | Download a bulk dataset file to disk |

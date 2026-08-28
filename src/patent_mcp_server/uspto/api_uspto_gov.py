@@ -121,6 +121,11 @@ class ApiUsptoClient:
             self.client,
             url,
             context=f"Download from {url} failed",
+            allowed_redirect_hosts={
+                urllib.parse.urlparse(config.API_BASE_URL).hostname,
+                "data.uspto.gov",
+                "data-documents.uspto.gov",
+            },
         )
 
     async def close(self):

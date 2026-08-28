@@ -86,6 +86,10 @@ Claude also has built-in step-by-step workflows for larger jobs. Just describe t
 
 Everything comes live from the USPTO — the same public data a patent attorney or examiner would use. Four sources, in plain terms:
 
+When reading document text, the server automatically prefers structured XML or
+the USPTO's native Word file and uses PDF/OCR only when no native version is
+available. It still uses the official PDF when visual layout or drawings matter.
+
 | What it's for | Where it comes from | Needs the access key? |
 |---|---|---|
 | Full-text search and reading of patents and published applications; PDF downloads | USPTO Patent Public Search (updated daily) | No |

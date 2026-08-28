@@ -208,7 +208,7 @@ DATA_SOURCES = {
     "ppubs": {
         "name": "USPTO Patent Public Search (PPUBS)",
         "base_url": "https://ppubs.uspto.gov",
-        "description": "Full-text patent search with PDF downloads. Updated daily.",
+        "description": "Structured full-text patent search with optional PDF downloads. Updated daily.",
         "coverage": {
             "patents": "All US patents from 1790 to present",
             "applications": "All published applications from 2001 to present",
@@ -217,7 +217,8 @@ DATA_SOURCES = {
         "auth_required": False,
         "best_for": [
             "Full-text patent search",
-            "PDF document downloads",
+            "Structured patent text without OCR",
+            "Official PDF downloads when layout or drawings matter",
             "Most recent filings (daily updates)",
             "Exact patent number lookups",
         ],
@@ -236,6 +237,7 @@ DATA_SOURCES = {
         "auth_required": True,
         "best_for": [
             "Prosecution history and file wrapper data",
+            "Native XML/Word file-wrapper text with automatic PDF fallback",
             "Patent term adjustments",
             "Assignment/ownership records",
             "Attorney/agent information",
