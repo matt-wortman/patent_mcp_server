@@ -8,6 +8,7 @@ and 4 requests/minute for PDF/ZIP downloads.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
@@ -34,6 +35,7 @@ MAX_RATE_LIMIT_SLEEP = 60.0
 # pages can be hundreds of KB; the first KB carries the useful part.
 MAX_ERROR_BODY_CHARS = 1000
 MAX_DOWNLOAD_REDIRECTS = 5
+MAX_BINARY_DOWNLOAD_BYTES = 100 * 1024 * 1024
 SENSITIVE_REDIRECT_HEADERS = (
     "Authorization",
     "Proxy-Authorization",
@@ -105,7 +107,6 @@ def rate_limit_error() -> Dict[str, Any]:
     )
 
 
-@uspto_retry
 async def _send(
     client: httpx.AsyncClient,
     method: str,
@@ -118,12 +119,14 @@ async def _send(
     context: str = "Request failed",
     follow_redirects: Optional[bool] = None,
     accept_redirect_response: bool = False,
+    stream_response: bool = False,
 ) -> Union[httpx.Response, Dict[str, Any]]:
     """Send one request with retry, 429 handling, and standard error mapping.
 
-    Network errors (timeouts, connection failures) are retried by tenacity.
-    429 responses are retried in-place after honoring Retry-After. All other
-    failures are mapped to ApiError dictionaries.
+    This function performs one network attempt; callers own the Tenacity retry
+    boundary so JSON requests and complete streamed downloads each have exactly
+    one retry layer. 429 responses are retried in-place after honoring
+    Retry-After. All other failures are mapped to ApiError dictionaries.
 
     Returns:
         The successful httpx.Response, or an ApiError dictionary.
@@ -136,31 +139,65 @@ async def _send(
                 if follow_redirects is not None
                 else {}
             )
-            response = await client.request(
-                method,
-                url,
-                params=params,
-                json=json_body,
-                data=form_data,
-                headers=headers,
-                timeout=config.REQUEST_TIMEOUT,
-                **redirect_option,
-            )
+            if stream_response:
+                request = client.build_request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    data=form_data,
+                    headers=headers,
+                    timeout=config.REQUEST_TIMEOUT,
+                )
+                response = await client.send(
+                    request,
+                    stream=True,
+                    **redirect_option,
+                )
+            else:
+                response = await client.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    data=form_data,
+                    headers=headers,
+                    timeout=config.REQUEST_TIMEOUT,
+                    **redirect_option,
+                )
             if response.status_code != 429:
                 break
             if attempt >= config.MAX_RETRIES:
+                await response.aclose()
                 logger.error(
                     f"Rate limit (429) persisted after {config.MAX_RETRIES} "
                     f"retries: {url}"
                 )
                 return rate_limit_error()
             delay = rate_limit_delay(response, attempt)
+            await response.aclose()
             logger.warning(f"Rate limited (429) on {url}; retrying in {delay:.0f}s")
             await asyncio.sleep(delay)
             attempt += 1
 
         if accept_redirect_response and response.is_redirect:
             return response
+        if response.is_error and stream_response:
+            body_bytes = await read_response_prefix(
+                response,
+                max_bytes=MAX_ERROR_BODY_CHARS * 4,
+            )
+            body = body_bytes.decode("utf-8", errors="replace")[:MAX_ERROR_BODY_CHARS]
+            logger.error(f"HTTP error: {response.status_code} - {body}")
+            try:
+                error_json = json.loads(body)
+            except (json.JSONDecodeError, TypeError):
+                error_json = None
+            return ApiError.from_http_error(
+                status_code=response.status_code,
+                response_text=body,
+                response_json=error_json if isinstance(error_json, dict) else None,
+            )
         response.raise_for_status()
         return response
 
@@ -190,6 +227,9 @@ async def _send(
         return ApiError.from_exception(e, context)
 
 
+_send_with_retry = uspto_retry(_send)
+
+
 async def request_json(
     client: httpx.AsyncClient,
     method: str,
@@ -208,7 +248,7 @@ async def request_json(
         A non-dict JSON body (e.g. a top-level array) is wrapped as
         {"results": ...} so callers can always treat the result as a dict.
     """
-    result = await _send(
+    result = await _send_with_retry(
         client,
         method,
         url,
@@ -232,6 +272,7 @@ async def request_json(
     return {"results": parsed}
 
 
+@uspto_retry
 async def request_bytes(
     client: httpx.AsyncClient,
     url: str,
@@ -240,7 +281,7 @@ async def request_bytes(
     context: str = "Download failed",
     allowed_redirect_hosts: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """Download binary content (PDFs, DOCX) with the same retry/429 handling.
+    """Download bounded binary content with the same retry/429 handling.
 
     Returns:
         Dict with 'content' (bytes), 'content_type', and 'size_bytes' on
@@ -264,6 +305,7 @@ async def request_bytes(
             context=context,
             follow_redirects=False,
             accept_redirect_response=True,
+            stream_response=True,
         )
         if isinstance(result, dict):
             return result
@@ -271,12 +313,14 @@ async def request_bytes(
         if not result.is_redirect:
             break
         if redirect_count >= MAX_DOWNLOAD_REDIRECTS:
+            await result.aclose()
             return ApiError.create(
                 "USPTO download exceeded the redirect limit",
                 error_code="TOO_MANY_REDIRECTS",
             )
         location = result.headers.get("location")
         if not location:
+            await result.aclose()
             return ApiError.create(
                 "USPTO download redirect did not include a location",
                 error_code="INVALID_REDIRECT",
@@ -289,24 +333,94 @@ async def request_bytes(
                 allowed_hosts=allowed_hosts,
             )
         except ValueError as exc:
+            await result.aclose()
             return ApiError.create(
                 str(exc),
                 error_code="UNSAFE_REDIRECT",
             )
+        await result.aclose()
     else:  # pragma: no cover - loop always breaks or returns
         return ApiError.create(
             "USPTO download redirect handling failed",
             error_code="INVALID_REDIRECT",
         )
 
-    content = result.content
     content_type = result.headers.get("content-type", "application/octet-stream")
+    bounded = await read_bounded_response(
+        result,
+        max_bytes=MAX_BINARY_DOWNLOAD_BYTES,
+    )
+    if isinstance(bounded, dict):
+        return bounded
+    content = bounded
     logger.info(f"Download successful: {len(content)} bytes, type={content_type}")
     return {
         "content": content,
         "content_type": content_type,
         "size_bytes": len(content),
     }
+
+
+async def read_bounded_response(
+    response: httpx.Response,
+    *,
+    max_bytes: int,
+) -> Union[bytes, Dict[str, Any]]:
+    """Read a streaming response without buffering beyond ``max_bytes``."""
+    if max_bytes <= 0:
+        await response.aclose()
+        return ApiError.create(
+            "Download size limit must be positive",
+            error_code="INVALID_DOWNLOAD_LIMIT",
+        )
+
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                await response.aclose()
+                return ApiError.create(
+                    f"USPTO download exceeds the {max_bytes}-byte file size limit",
+                    error_code="DOWNLOAD_TOO_LARGE",
+                )
+        except ValueError:
+            pass
+
+    content = bytearray()
+    try:
+        async for chunk in response.aiter_bytes():
+            if len(content) + len(chunk) > max_bytes:
+                return ApiError.create(
+                    f"USPTO download exceeds the {max_bytes}-byte file size limit",
+                    error_code="DOWNLOAD_TOO_LARGE",
+                )
+            content.extend(chunk)
+    finally:
+        await response.aclose()
+    return bytes(content)
+
+
+async def read_response_prefix(
+    response: httpx.Response,
+    *,
+    max_bytes: int,
+) -> bytes:
+    """Read at most ``max_bytes`` from a streaming response, then close it."""
+    if max_bytes <= 0:
+        await response.aclose()
+        return b""
+    prefix = bytearray()
+    try:
+        async for chunk in response.aiter_bytes():
+            remaining = max_bytes - len(prefix)
+            if remaining <= 0:
+                break
+            prefix.extend(chunk[:remaining])
+            if len(prefix) >= max_bytes:
+                break
+    finally:
+        await response.aclose()
+    return bytes(prefix)
 
 
 def prepare_safe_redirect(

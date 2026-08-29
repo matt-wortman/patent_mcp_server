@@ -106,7 +106,8 @@ class ApiUsptoClient:
         """Download a file from the USPTO API and return raw bytes.
 
         Uses the same X-API-KEY authentication as make_request but handles
-        binary content (PDFs, DOCX files) instead of JSON. Downloads are
+        arbitrary binary document/media content instead of JSON. Individual
+        responses are streamed through a 100 MiB safety bound. Downloads are
         rate-limited upstream to 4 requests/minute.
 
         Args:

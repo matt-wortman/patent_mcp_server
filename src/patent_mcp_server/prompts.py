@@ -10,7 +10,8 @@ NATIVE_TEXT_RETRIEVAL_POLICY = """
 
 - Prefer structured USPTO JSON/XML or native Word content for text analysis.
 - For file-wrapper documents, call odp_download_document with its default AUTO
-  preference; it tries XML, then MS Word, and falls back to PDF only when needed.
+  preference; it keeps one best primary representation (XML, then MS Word, then
+  PDF) plus every unique advertised image or other media asset.
 - For published patents and applications, use ppubs_get_full_document or
   ppubs_get_patent_by_number before requesting a PDF.
 - Use PDF/OCR only for PDF-only records, when visual layout or drawings matter,

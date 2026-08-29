@@ -160,10 +160,16 @@ If you're already running Claude Code, you'll have to /exit and restart. Then /m
 
 For text analysis, the server prefers structured USPTO data and native document
 formats so OCR is avoided. `odp_download_document` defaults to XML, then MS Word,
-and falls back to PDF only when no native format works. For published patents
-and applications, use `ppubs_get_full_document` or
+and falls back to PDF only when no native format works. It also retains every
+unique image or other media file advertised for that record, without keeping
+redundant Word/PDF alternatives. For published patents and applications, use `ppubs_get_full_document` or
 `ppubs_get_patent_by_number` before requesting a PDF; use PDF when the official
 visual layout or drawings matter.
+
+For operational safety, one file-wrapper record is limited to 100 advertised
+download options, 100 MiB per downloaded file, and 250 MiB across retained
+files. Crossing a limit is reported explicitly rather than returning a record
+marked complete.
 
 ### Utility Tools
 | Tool | Description |
@@ -195,7 +201,7 @@ visual layout or drawings matter.
 | `odp_get_transactions` | Get prosecution transaction history |
 | `odp_get_documents` | List file wrapper documents and their available formats |
 | `odp_get_associated_documents` | Get pgpub/grant XML publication metadata |
-| `odp_download_document` | Download XML, Word, or PDF using native-text-first fallback |
+| `odp_download_document` | Download one best primary format plus all unique images/media |
 | `odp_search_datasets` | Search bulk data products |
 | `odp_get_dataset` | Get dataset product details |
 | `odp_download_dataset_file` | Download a bulk dataset file to disk |
@@ -279,7 +285,13 @@ uv sync --dev
 
 ## Version History
 
-### v0.13.0 (Current)
+### v0.14.0 (Current)
+- Best-complete-record retrieval. `odp_download_document` defaults to `preferred_format="AUTO"`: it keeps one primary representation (XML, then MS Word, then PDF) plus every unique advertised image or other media asset. USPTO XML archives retain safe relative paths and all safe members, identical binaries are deduplicated by SHA-256, arbitrary offered media formats are preserved without conversion, and any missing or over-limit asset is reported as `INCOMPLETE_DOCUMENT_RECORD` instead of silently returning a partial record. Downloads are streamed through per-file, per-record, and option-count safety bounds. The response includes `record_files`, `asset_file_paths`, hashes, format-selection details, and a completeness flag
+- `odp_get_documents` now lists each file-wrapper document's available download formats so the caller can see when a native format exists
+- Server instructions, prompts, and resources now tell the client to prefer structured JSON/XML and Word text, use `ppubs_get_full_document` / `ppubs_get_patent_by_number` for patent text, and reserve PDF/OCR for PDF-only records or when layout and images matter
+- New unit tests cover format selection, media retention, deduplication, image-only records, incomplete downloads, and safe paths; the ODP smoke test exercises the live XML download path
+
+### v0.13.0
 - Fixed PTAB search filters that were silently ignored: `ptab_search_proceedings` and `ptab_search_decisions` sent parameter names USPTO's API does not recognize, so every "filtered" search returned the entire corpus (19,357 proceedings). Both now build ODP DSL `q` clauses from live-verified field names (`patentOwnerData.patentNumber`, `trialMetaData.trialTypeCode`, `trialMetaData.trialStatusCategory`, petition/decision filing-date ranges, real-party-in-interest names on either side)
 - Fixed PPUBS assignee searches returning zero results: the backend has no `AN` index — its assignee-name index is `AS`. Queries using `.an.` are now auto-translated to `.as.`
 - Fixed PPUBS totals: `numFound` from the search endpoint is the per-page family-group count, not the match total; the envelope's `total` now comes from the count service's true document total (`Marron.in.` reported total 1, now 207)

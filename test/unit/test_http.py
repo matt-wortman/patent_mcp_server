@@ -85,3 +85,30 @@ def test_redirect_to_unapproved_host_is_rejected():
             {"X-API-KEY": "secret-key"},
             allowed_hosts={"api.uspto.gov", "data-documents.uspto.gov"},
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_binary_response_reader_stops_at_size_limit():
+    """A single offered media file must not be buffered past its safety bound."""
+    reader = getattr(http_utils, "read_bounded_response", None)
+    assert reader is not None, "bounded response reader is required"
+    response = httpx.Response(200, content=b"01234567890")
+
+    result = await reader(response, max_bytes=10)
+
+    assert result["error"] is True
+    assert result["error_code"] == "DOWNLOAD_TOO_LARGE"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_streamed_error_reader_returns_only_bounded_prefix():
+    """A hostile HTTP error body must not be read into memory without a bound."""
+    reader = getattr(http_utils, "read_response_prefix", None)
+    assert reader is not None, "bounded error-prefix reader is required"
+    response = httpx.Response(500, content=b"x" * 100)
+
+    prefix = await reader(response, max_bytes=10)
+
+    assert prefix == b"x" * 10

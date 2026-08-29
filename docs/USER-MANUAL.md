@@ -88,7 +88,9 @@ Everything comes live from the USPTO — the same public data a patent attorney 
 
 When reading document text, the server automatically prefers structured XML or
 the USPTO's native Word file and uses PDF/OCR only when no native version is
-available. It still uses the official PDF when visual layout or drawings matter.
+available. It saves separately offered screenshots and other media alongside the
+best text version, so visual evidence is not lost and redundant document formats
+are not retained.
 
 | What it's for | Where it comes from | Needs the access key? |
 |---|---|---|

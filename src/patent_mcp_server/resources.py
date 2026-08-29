@@ -237,7 +237,7 @@ DATA_SOURCES = {
         "auth_required": True,
         "best_for": [
             "Prosecution history and file wrapper data",
-            "Native XML/Word file-wrapper text with automatic PDF fallback",
+            "Best-available file-wrapper text plus unique images and media",
             "Patent term adjustments",
             "Assignment/ownership records",
             "Attorney/agent information",

@@ -18,7 +18,9 @@ patent_mcp_server.config.PACKAGE_VERSION.
 import atexit
 import json
 import logging
+import os
 import re
+import shutil
 import sys
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, Union
@@ -53,9 +55,15 @@ from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
 from patent_mcp_server.uspto.api_uspto_gov import ApiUsptoClient
 from patent_mcp_server.uspto.document_download import (
     SUPPORTED_PREFERENCES,
+    ancillary_download_options,
+    asset_sha256,
+    manifest_for_saved_document,
     rank_download_options,
     resolve_advertised_download_url,
     save_downloaded_document,
+    save_unique_asset,
+    validate_download_options,
+    validate_record_growth,
 )
 from patent_mcp_server.uspto.ptab_client import PTABClient
 from patent_mcp_server.uspto.dsapi_client import DsapiClient
@@ -86,7 +94,8 @@ mcp = FastMCP(
         "Prefer structured USPTO JSON or XML and native Word documents when "
         "reading text. For application file-wrapper documents, use "
         "odp_download_document with its default AUTO preference; it tries XML, "
-        "then MS Word, and uses PDF only when no native representation works. "
+        "then MS Word, and uses PDF only when no native representation works, "
+        "while also retaining every unique advertised image or media asset. "
         "Use ppubs_get_full_document or ppubs_get_patent_by_number for patent "
         "text before requesting a PDF. Use PDF/OCR only for PDF-only records, "
         "when layout or images matter, or when the user explicitly requests it."
@@ -1058,7 +1067,8 @@ async def odp_get_documents(app_num: str) -> Dict[str, Any]:
 
     WORKFLOW: Use the returned documentIdentifier with odp_download_document.
     That tool automatically prefers XML, then MS Word, and falls back to PDF
-    only when no native-text representation works.
+    only when no native-text representation works. It also downloads unique
+    advertised images and other media needed for a complete record.
 
     Args:
         app_num: Application number without slashes (e.g., "14412875")
@@ -1109,7 +1119,7 @@ async def odp_download_document(
     document_id: str,
     preferred_format: str = "AUTO",
 ) -> Dict[str, Any]:
-    """Download a file-wrapper document, preferring native text over PDF.
+    """Download the best complete file-wrapper record without redundant formats.
 
     USE THIS TOOL WHEN: You need to read the actual content of a file
     wrapper document such as an office action, examiner interview summary,
@@ -1117,9 +1127,10 @@ async def odp_download_document(
     other document listed by odp_get_documents.
 
     DEFAULT POLICY: XML first, then MS Word, then PDF only when no native
-    format works. USPTO XML archives are safely unpacked and file_path points
-    directly to readable XML. A failed preferred download automatically falls
-    back to the next advertised format.
+    format works. The selected representation is safely unpacked, every unique
+    separately advertised media asset is saved beside it, and redundant
+    alternate primary formats are skipped. A failed preferred download
+    automatically falls back to the next advertised primary format.
 
     WORKFLOW: First call odp_get_documents to identify the desired document,
     then call this tool with its document_id. Usually leave preferred_format
@@ -1133,9 +1144,12 @@ async def odp_download_document(
         preferred_format: AUTO (default), XML, MS_WORD, or PDF.
 
     Returns:
-        Dictionary with file_path, selected_format, and fallback details.
-        Native XML and Word paths should be read directly. PDF means no
-        usable native-text representation was available or preferred.
+        Dictionary with file_path, selected_format, record_files,
+        asset_file_paths, integrity hashes, and completeness details. Native
+        XML and Word paths should be read directly. PDF means no usable
+        native-text representation was available or preferred. If any
+        advertised asset fails, the tool returns INCOMPLETE_DOCUMENT_RECORD
+        with the successfully saved partial record in error details.
     """
     try:
         app_num = validate_app_number(str(app_num))
@@ -1195,12 +1209,31 @@ async def odp_download_document(
             "USPTO document listing contained an invalid downloadOptionBag",
             error_code="INVALID_UPSTREAM_RESPONSE",
         )
+    try:
+        validate_download_options(advertised_options)
+    except ValueError as exc:
+        return ApiError.create(
+            str(exc),
+            error_code="INVALID_UPSTREAM_RESPONSE",
+        )
+    ancillary_options = ancillary_download_options(advertised_options)
     options = rank_download_options(advertised_options, preferred_format)
+    primary_is_advertised_asset = not options
+    if primary_is_advertised_asset:
+        options = ancillary_options
     if not options:
         return ApiError.create(
-            f"File-wrapper document {document_id} has no supported download format",
+            f"File-wrapper document {document_id} has no downloadable format",
             error_code="NO_SUPPORTED_FORMAT",
         )
+    available_formats = sorted(
+        {
+            format_name.strip()
+            for item in advertised_options
+            if isinstance((format_name := item.get("mimeTypeIdentifier")), str)
+            and format_name.strip()
+        }
+    )
 
     attempts = []
     attempt_errors = []
@@ -1229,6 +1262,7 @@ async def odp_download_document(
             )
             continue
 
+        saved = None
         try:
             saved = save_downloaded_document(
                 result["content"],
@@ -1237,32 +1271,155 @@ async def odp_download_document(
                 config.DOWNLOAD_DIR,
                 app_num,
                 document_id,
+                result.get("content_type") or "application/octet-stream",
             )
-        except (OSError, ValueError) as exc:
+            record_files = manifest_for_saved_document(
+                saved,
+                format_name,
+                result.get("content_type") or "application/octet-stream",
+            )
+        except (KeyError, TypeError, OSError, ValueError) as exc:
+            if saved and isinstance(saved.get("record_dir"), str):
+                shutil.rmtree(saved["record_dir"], ignore_errors=True)
             attempt_errors.append({"format": format_name, "message": str(exc)})
             continue
 
-        return {
+        known_hashes = {
+            item["sha256"]: item["file_path"] for item in record_files
+        }
+        asset_errors = []
+        attempted_assets = []
+        duplicate_assets = []
+        asset_options = [
+            item
+            for item in ancillary_options
+            if not (
+                primary_is_advertised_asset
+                and item.get("downloadUrl") == option.get("downloadUrl")
+            )
+        ]
+        for asset_option in asset_options:
+            asset_format = asset_option["mimeTypeIdentifier"].strip()
+            attempted_assets.append(asset_format)
+            try:
+                asset_url = resolve_advertised_download_url(
+                    asset_option["downloadUrl"],
+                    config.API_BASE_URL,
+                    app_num,
+                    document_id,
+                )
+            except ValueError as exc:
+                asset_errors.append(
+                    {"format": asset_format, "message": str(exc)}
+                )
+                continue
+
+            try:
+                asset_result = await api_client.download_file(asset_url)
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                asset_errors.append(
+                    {"format": asset_format, "message": str(exc)}
+                )
+                continue
+            if is_error(asset_result):
+                asset_errors.append(
+                    {
+                        "format": asset_format,
+                        "message": asset_result.get("message", "download failed"),
+                    }
+                )
+                continue
+
+            try:
+                digest = asset_sha256(asset_result["content"])
+            except (KeyError, TypeError, ValueError) as exc:
+                asset_errors.append(
+                    {"format": asset_format, "message": str(exc)}
+                )
+                continue
+            if digest in known_hashes:
+                duplicate_assets.append(
+                    {
+                        "format": asset_format,
+                        "download_url": asset_option["downloadUrl"],
+                        "duplicate_of": known_hashes[digest],
+                    }
+                )
+                continue
+
+            try:
+                validate_record_growth(
+                    sum(item["size_bytes"] for item in record_files),
+                    asset_result.get("size_bytes", len(asset_result.get("content", b""))),
+                )
+            except (TypeError, ValueError) as exc:
+                asset_errors.append(
+                    {"format": asset_format, "message": str(exc)}
+                )
+                continue
+
+            try:
+                persisted = save_unique_asset(
+                    asset_result["content"],
+                    asset_format,
+                    asset_option["downloadUrl"],
+                    asset_result.get("content_type") or "application/octet-stream",
+                    os.path.dirname(saved["file_path"]),
+                    known_hashes,
+                )
+            except (KeyError, TypeError, OSError, ValueError) as exc:
+                asset_errors.append(
+                    {"format": asset_format, "message": str(exc)}
+                )
+                continue
+            if persisted["duplicate"]:
+                duplicate_assets.append(
+                    {
+                        "format": asset_format,
+                        "download_url": asset_option["downloadUrl"],
+                        "duplicate_of": persisted["duplicate_of"],
+                    }
+                )
+            else:
+                record_files.append(persisted["manifest"])
+
+        asset_file_paths = [
+            item["file_path"] for item in record_files if item["role"] == "asset"
+        ]
+        record_result = {
             "success": True,
+            "complete": not asset_errors,
             "file_path": saved["file_path"],
             "extracted_file_paths": saved["extracted_file_paths"],
             "size_bytes": result["size_bytes"],
+            "total_size_bytes": sum(item["size_bytes"] for item in record_files),
             "content_type": result["content_type"],
             "selected_format": format_name,
-            "available_formats": sorted(
-                {
-                    item.get("mimeTypeIdentifier")
-                    for item in advertised_options
-                    if item.get("mimeTypeIdentifier") in SUPPORTED_PREFERENCES
-                    and item.get("mimeTypeIdentifier") != "AUTO"
-                }
-            ),
+            "available_formats": available_formats,
             "attempted_formats": attempts,
+            "attempted_assets": attempted_assets,
             "fallback_used": len(attempts) > 1,
-            "ocr_may_be_required": format_name == "PDF",
+            "ocr_may_be_required": format_name not in {"XML", "MS_WORD"},
+            "record_files": record_files,
+            "asset_file_paths": asset_file_paths,
+            "skipped_duplicate_count": len(duplicate_assets),
+            "duplicate_assets": duplicate_assets,
+            "asset_errors": asset_errors,
             "document_id": document_id,
             "application_number": app_num,
         }
+        if asset_errors:
+            partial_record = dict(record_result)
+            partial_record.pop("success")
+            return ApiError.create(
+                (
+                    f"The best primary representation was saved, but one or more "
+                    f"advertised assets failed for file-wrapper document {document_id}"
+                ),
+                error_code="INCOMPLETE_DOCUMENT_RECORD",
+                details=partial_record,
+            )
+        return record_result
 
     return ApiError.create(
         f"All advertised formats failed for file-wrapper document {document_id}",
