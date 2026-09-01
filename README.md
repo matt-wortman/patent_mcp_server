@@ -131,6 +131,7 @@ To integrate this MCP server with Claude Desktop:
            "--directory",
            "/Users/username/patent_mcp_server",
            "run",
+           "--frozen",
            "patent-mcp-server"
          ]
        }
@@ -149,8 +150,10 @@ When integrated with Claude Desktop, the server will be automatically started wh
 To integrate this MCP server with Claude Code for a particular project, from the project root:
 
 ```shell
-claude mcp add-json patents '{"command": "uv", "args": ["--directory", "/path/to/patent_mcp_server", "run", "patent-mcp-server"]}'
+claude mcp add-json patents '{"command": "uv", "args": ["--directory", "/path/to/patent_mcp_server", "run", "--frozen", "patent-mcp-server"]}'
 ```
+
+`--frozen` makes uv run exactly the dependency versions pinned in `uv.lock` and fail loudly if the lock file is out of sync with `pyproject.toml`, instead of silently re-resolving versions at launch. Registrations stay repeatable across machines; updates arrive only via `git pull`.
 
 If you're already running Claude Code, you'll have to /exit and restart. Then /mcp to verify that it's configured.
 
