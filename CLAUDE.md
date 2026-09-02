@@ -36,28 +36,6 @@ To run live smoke tests:
 uv run pytest -m smoke
 ```
 
-## Project Structure
-
-```
-src/patent_mcp_server/
-├── patents.py              # Main server file with MCP tools, resources, and prompts
-├── config.py               # Configuration management (environment variables)
-├── constants.py            # Constants and enumerations
-├── prompts.py              # Workflow prompt templates
-├── resources.py            # Static resource data (CPC codes, status codes)
-├── util/
-│   ├── http.py             # Shared HTTP plumbing: client factory, retry policy, 429 handling, error mapping
-│   ├── response.py         # Response normalization utilities
-│   ├── errors.py           # Error handling utilities
-│   ├── validation.py       # Input validation (plain functions raising ValueError)
-│   └── logging.py          # Logging configuration
-└── uspto/
-    ├── ppubs_uspto_gov.py  # Patent Public Search client
-    ├── api_uspto_gov.py    # Open Data Portal client
-    ├── ptab_client.py      # PTAB proceedings client
-    └── dsapi_client.py     # Data Set API client (office actions, citations, litigation)
-```
-
 ## Code Conventions
 
 ### Function Naming
@@ -86,15 +64,6 @@ All tools should return a dictionary with consistent structure:
 ```
 
 Use `ApiError.create()` for error responses.
-
-### Async Patterns
-
-All API clients use async/await:
-```python
-async def tool_name(...) -> Dict[str, Any]:
-    async with SomeClient() as client:
-        return await client.method(...)
-```
 
 ## Testing Guidelines
 
@@ -155,27 +124,7 @@ See `config.py` for all options.
 
 ### Staying at Parity with USPTO's API Catalog
 
-USPTO's published catalog (six OpenAPI definitions at data.uspto.gov/swagger)
-is snapshotted in `scripts/uspto_api_baseline.json`. To check for drift:
-
-```bash
-uv run python scripts/check_uspto_api_coverage.py   # exit 2 = drift found
-```
-
-A weekly GitHub Action (`.github/workflows/uspto-api-drift.yml`) runs this
-and opens a "USPTO API catalog drift detected" issue when USPTO adds or
-removes APIs/endpoints. After bringing the server back to parity, refresh
-the snapshot with `--update-baseline` and commit it.
-
-### Running the Server Locally
-
-```bash
-# Start the server
-uv run patent-mcp-server
-
-# Run in development mode with debug logging
-LOG_LEVEL=DEBUG uv run patent-mcp-server
-```
+Use the `uspto-api-parity` skill (`.claude/skills/uspto-api-parity/SKILL.md`) to check for drift and refresh the baseline.
 
 ## Intentional Tool Overlaps
 
@@ -197,23 +146,4 @@ Tests follow the same rule: pure internal logic (validation, error mapping, resp
 
 ## Version History
 
-- **v0.14.0** - Best-complete-record retrieval. `odp_download_document` keeps one primary representation (XML, then MS Word, then PDF) plus all unique advertised images/media, retains safe archive paths and non-XML members, deduplicates identical binaries by SHA-256, applies bounded streaming and aggregate record limits, and reports incomplete asset retrieval explicitly. `odp_get_documents` lists all offered formats. Live XML selection was verified 2026-08-28 (Notice of Allowance for 14/643,719 returned as ST.96 XML); live media retrieval remains to be verified against a stable image-bearing fixture.
-- **v0.12.0** - Full parity with USPTO's ODP API catalog (patents side). Added 10 tools, all live-verified 2026-08-19: `ptab_search_trial_documents`, `ptab_get_proceeding_documents` (trial filing history), `ptab_search_appeal_decisions`, `ptab_get_appeal_decisions` (ex parte appeals — separate `/appeals` base path), `ptab_search_interference_decisions`, `ptab_get_interference_decisions`, `odp_search_petition_decisions`, `odp_get_petition_decision` (Final Petition Decisions API), `odp_get_associated_documents` (pgpub/grant XML metadata), `odp_download_dataset_file` (follows the signed data.uspto.gov redirect). Fixed two speculative PTAB response-bag keys in `util/response.py` to the live names (`patentAppealDataBag`, `patentInterferenceDataBag`); `from_odp` now recognizes `petitionDecisionDataBag`. Coverage method: diff the six OpenAPI definitions at data.uspto.gov/swagger against the paths our clients call.
-- **v0.11.1** - PPUBS search default sort changed from `date_publ desc` to `score desc` (relevance). Live-verified: date ordering buried relevant hits under recent grants for common terms.
-- **v0.11.0** - Full review + hardening pass. Fixed PPUBS concurrency bug (shared search template now deep-copied per query); PDF pipeline gained retry/session-refresh/429 protection, failed-print-job detection, and a poll timeout; PPUBS adopted the shared HTTP helpers (`util/http.py`); session-bootstrap failures now return a clear SESSION_ERROR instead of sending `caseId: null` upstream; version lookup no longer crashes uninstalled checkouts; error bodies capped at 1,000 chars; restored `python-multipart` CVE floor; dropped unused direct pydantic dep; deleted dead `test/config/` helper and stale doc claims.
-- **v0.10.0** - Restored live-tools-only philosophy. Deleted dead stub wrappers for PatentsView, PTAB, Litigation, and Office Action tools that returned `API_UNAVAILABLE`. Reactivated 4 PTAB tools (`ptab_search_proceedings`, `ptab_get_proceeding`, `ptab_search_decisions`, `ptab_get_decision`) against live `api.uspto.gov` endpoints. Migrated DSAPI client from `developer.uspto.gov` to `api.uspto.gov`. Added `odp_download_document` for file wrapper PDF downloads. Added 37 live smoke tests across DSAPI, ODP, PPUBS, PTAB, and liveness probe. `check_api_status` rewritten as a real liveness probe.
-- **v0.7.0** - PatentsView removed (upstream decommissioned). Mocked-upstream tests replaced with real smoke tests against live USPTO endpoints. check_api_status rewritten as real liveness probe.
-- **v0.6.2** - DSAPI consolidation: merged enriched_citation_client, litigation_client, and office_action_client into single dsapi_client.py; documentation overhaul
-- **v0.6.1** - Added 18 new PatentsView tools: patent text (granted + pre-grant), citations, related applications, CPC subclass/USPC/WIPO classifications, location search
-- **v0.6.0** - PyPI release preparation
-- **v0.5.0** - USPTO-only focus, renamed ODP tools with `odp_` prefix
-- **v0.3.0** - Added PTAB, PatentsView, Office Actions, Citations, Litigation APIs
-- **v0.2.2** - Centralized config, error handling, validation
-
-## Reminders
-
-1. **Always run tests before committing**
-2. Keep docstrings up to date
-3. Use consistent error handling
-4. Follow async patterns
-5. Don't introduce new dependencies without good reason
+See the Version History section of README.md and `git log`.
