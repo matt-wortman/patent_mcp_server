@@ -252,9 +252,11 @@ class PpubsClient:
                 method, url, **self._with_auth(kwargs, token)
             )
 
-            # Handle 403 (Session expired)
-            if response.status_code == 403:
-                logger.info("Session expired, refreshing")
+            # Handle 401/403 (session expired). The USPTO answers a dead
+            # token with either code: 403 in the common case, 401 once the
+            # session has aged out on their side. Both need a fresh session.
+            if response.status_code in (401, 403):
+                logger.info(f"Session rejected ({response.status_code}), refreshing")
                 await self._refresh_session(stale_token=token)
                 response = await self.client.request(
                     method, url, **self._with_auth(kwargs, self.access_token)
