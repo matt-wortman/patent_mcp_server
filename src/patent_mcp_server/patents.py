@@ -40,7 +40,7 @@ from patent_mcp_server.util.validation import (
     validate_status_code,
 )
 from patent_mcp_server.util.response import (
-    ResponseEnvelope, check_and_truncate
+    ResponseEnvelope, check_and_truncate, claims_only_document
 )
 from patent_mcp_server.resources import (
     get_cpc_section_info, get_cpc_subsection_info,
@@ -770,39 +770,57 @@ async def ppubs_search_applications(
 
 
 @mcp.tool()
-async def ppubs_get_full_document(guid: str, source_type: str) -> Dict[str, Any]:
+async def ppubs_get_full_document(
+    guid: str, source_type: str, claims_only: bool = False
+) -> Dict[str, Any]:
     """Get complete patent document by GUID from PPUBS.
 
     USE THIS TOOL WHEN: You have a document GUID from search results
     and need the full patent text including all claims and description.
+    Set claims_only=True when you only need the claims: the full document
+    is often over 100,000 characters, the claims usually a few thousand.
 
     Args:
         guid: Document GUID (e.g., "US-9876543-B2")
         source_type: Document type - "USPAT" for patents, "US-PGPUB" for applications
+        claims_only: Return only identifying fields (number, title, date,
+            application number, assignees, inventors, claim count) and the
+            claims as plain text, one claim per line
 
     Returns:
-        Complete document with claims, description, drawings info, and metadata.
+        Complete document with claims, description, drawings info, and metadata,
+        or the claims-only form when claims_only is True.
     """
     result = await ppubs_client.get_document(guid, source_type)
 
     if is_error(result):
         return result
 
+    if claims_only:
+        return check_and_truncate(claims_only_document(result))
     return check_and_truncate(result)
 
 
 @mcp.tool()
-async def ppubs_get_patent_by_number(patent_number: str) -> Dict[str, Any]:
+async def ppubs_get_patent_by_number(
+    patent_number: str, claims_only: bool = False
+) -> Dict[str, Any]:
     """Get a granted patent's full text by patent number.
 
     USE THIS TOOL WHEN: You know the patent number and need the complete
     document including claims, description, and all sections.
+    Set claims_only=True when you only need the claims: the full document
+    is often over 100,000 characters, the claims usually a few thousand.
 
     Args:
         patent_number: Patent number without commas (e.g., "7123456" or "10000000")
+        claims_only: Return only identifying fields (number, title, date,
+            application number, assignees, inventors, claim count) and the
+            claims as plain text, one claim per line
 
     Returns:
-        Complete patent document with full text of all sections.
+        Complete patent document with full text of all sections, or the
+        claims-only form when claims_only is True.
     """
     try:
         patent_number = validate_patent_number(str(patent_number))
@@ -820,6 +838,8 @@ async def ppubs_get_patent_by_number(patent_number: str) -> Dict[str, Any]:
     if is_error(result):
         return result
 
+    if claims_only:
+        return check_and_truncate(claims_only_document(result))
     return check_and_truncate(result)
 
 

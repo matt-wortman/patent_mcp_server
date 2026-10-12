@@ -7,9 +7,11 @@ This module provides utilities for:
 - Response envelope creation
 """
 
+import html
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -377,3 +379,46 @@ def check_and_truncate(
         return response
 
     return truncate_response(response, max_tokens)
+
+
+# Identifying fields kept alongside the claims in a claims-only document.
+CLAIMS_ONLY_FIELDS = (
+    "guid",
+    "publicationReferenceDocumentNumber",
+    "inventionTitle",
+    "datePublished",
+    "applicationNumber",
+    "assigneeName",
+    "inventorsName",
+    "numberOfClaims",
+    "exemplaryClaimNumber",
+)
+
+_BREAK_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def claims_html_to_text(claims_html: Optional[str]) -> str:
+    """Convert PPUBS claimsHtml to plain text, one line per <br /> break.
+
+    PPUBS marks each claim number in bold and separates claims with <br />,
+    e.g. '<b>1</b>. A method ...  <br /> <b>2</b>. The method of claim 1 ...'.
+    """
+    if not claims_html:
+        return ""
+    lines = (
+        " ".join(html.unescape(_TAG_RE.sub("", part)).split())
+        for part in _BREAK_RE.split(claims_html)
+    )
+    return "\n".join(line for line in lines if line)
+
+
+def claims_only_document(document: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a full PPUBS document to its identifying fields and claim text.
+
+    A full document often runs past 100,000 characters (description and
+    cited references); the claims are usually a few thousand.
+    """
+    reduced = {field: document.get(field) for field in CLAIMS_ONLY_FIELDS}
+    reduced["claims"] = claims_html_to_text(document.get("claimsHtml"))
+    return reduced

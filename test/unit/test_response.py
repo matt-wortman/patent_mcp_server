@@ -9,6 +9,8 @@ from patent_mcp_server.config import config
 from patent_mcp_server.util.response import (
     ResponseEnvelope,
     check_and_truncate,
+    claims_html_to_text,
+    claims_only_document,
     estimate_tokens,
     truncate_response,
 )
@@ -158,3 +160,58 @@ def test_check_and_truncate_can_be_disabled(monkeypatch, tmp_download_dir):
     response = {"results": {"big": "x" * 10_000}, "source": "odp"}
     out = check_and_truncate(response, max_tokens=10)
     assert out is response
+
+
+# ----------------------------------------------------------------------
+# Claims-only documents
+# ----------------------------------------------------------------------
+
+# Shape copied from the claimsHtml of US 12,714,740 B2 as PPUBS returns it.
+CLAIMS_HTML = (
+    "<b>1</b>. A method of treating a glioblastoma, comprising a TNF receptor "
+    "(“TWEAKR”) &amp; a plasmid.  <br /> <b>2</b>. The method of "
+    "claim 1, wherein\n the nanoparticle comprises two ligands. <br /> "
+    "<b>12</b>. The method of claim 1, further comprising irradiation."
+)
+
+
+@pytest.mark.unit
+def test_claims_html_to_text_puts_one_claim_per_line():
+    assert claims_html_to_text(CLAIMS_HTML).split("\n") == [
+        "1. A method of treating a glioblastoma, comprising a TNF receptor "
+        "(“TWEAKR”) & a plasmid.",
+        "2. The method of claim 1, wherein the nanoparticle comprises two ligands.",
+        "12. The method of claim 1, further comprising irradiation.",
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("empty", [None, "", "  <br />  <br/> "])
+def test_claims_html_to_text_handles_missing_claims(empty):
+    assert claims_html_to_text(empty) == ""
+
+
+@pytest.mark.unit
+def test_claims_only_document_keeps_identity_and_claims_only():
+    document = {
+        "guid": "US-12714740-B2",
+        "publicationReferenceDocumentNumber": "12714740",
+        "inventionTitle": "Compositions comprising a tweak ligand",
+        "datePublished": "2026-08-25T00:00:00Z",
+        "applicationNumber": "17/604557",
+        "assigneeName": ["Children's Hospital Medical Center"],
+        "inventorsName": ["Yurek; David"],
+        "numberOfClaims": "12",
+        "exemplaryClaimNumber": ["1"],
+        "claimsHtml": CLAIMS_HTML,
+        "descriptionHtml": "x" * 50_000,
+        "otherRefPub": ["y" * 60_000],
+    }
+    reduced = claims_only_document(document)
+    assert set(reduced) == {
+        "guid", "publicationReferenceDocumentNumber", "inventionTitle",
+        "datePublished", "applicationNumber", "assigneeName", "inventorsName",
+        "numberOfClaims", "exemplaryClaimNumber", "claims",
+    }
+    assert reduced["claims"].startswith("1. A method of treating a glioblastoma")
+    assert reduced["assigneeName"] == ["Children's Hospital Medical Center"]

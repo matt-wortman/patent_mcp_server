@@ -8,6 +8,8 @@ PPUBS is unauthenticated — no USPTO_API_KEY gate here, so this module
 runs in environments that have no key (unlike ODP/PTAB/DSAPI smoke tests).
 """
 
+import json
+
 import pytest
 
 from patent_mcp_server.patents import (
@@ -64,6 +66,34 @@ async def test_ppubs_get_full_document_by_guid_returns_document():
     assert isinstance(title, str) and len(title) > 0, (
         f"Expected non-empty inventionTitle string, got: {title!r}"
     )
+
+
+def assert_claims_only(result, expected_number):
+    assert not result.get("error"), f"Expected no error, got: {result}"
+    assert result.get("publicationReferenceDocumentNumber") == expected_number
+    assert "descriptionHtml" not in result and "claimsHtml" not in result
+    lines = result["claims"].split("\n")
+    assert lines[0].startswith("1. "), f"Expected claim 1 first, got: {lines[0][:80]!r}"
+    assert len(lines) >= int(result["numberOfClaims"]), (
+        f"Expected at least {result['numberOfClaims']} claim lines, got {len(lines)}"
+    )
+    assert "<" not in result["claims"], "Expected no HTML tags left in the claims"
+
+
+async def test_ppubs_get_patent_by_number_claims_only():
+    """claims_only=True returns the claims as text, not the full document.
+
+    US 12,714,740's full document is about 150,000 characters; its claims
+    are about 3,000."""
+    result = await ppubs_get_patent_by_number("12714740", claims_only=True)
+    assert_claims_only(result, "12714740")
+    assert len(json.dumps(result)) < 10_000
+
+
+async def test_ppubs_get_full_document_claims_only():
+    """claims_only=True works the same when fetching by GUID."""
+    result = await ppubs_get_full_document("US-10000000-B2", "USPAT", claims_only=True)
+    assert_claims_only(result, "10000000")
 
 
 async def test_ppubs_download_patent_pdf_returns_pdf():
