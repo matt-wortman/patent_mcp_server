@@ -6,10 +6,16 @@ inside a quoted phrase, so names are built by one rule.
 """
 
 import re
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 _QUERY_OPERATOR_WORDS = {"AND", "OR", "NOT"}
 _QUERY_SYNTAX_CHARS = re.compile(r'([+\-!(){}\[\]^"~:\\/&|])')
+_APOSTROPHES = re.compile(r"['\u2018\u2019`]")
+_LETTER_RUNS = re.compile(r"[^\W_]+")
+
+# The most words for which each word is also left out in turn, so a
+# looser-name check makes at most 2 + this many extra searches.
+MAX_WORDS_TO_DROP = 4
 
 
 def _query_word(word: str) -> str:
@@ -24,7 +30,12 @@ def _query_word(word: str) -> str:
 
 
 def name_clause(field: str, name: str) -> str:
-    """Build a q clause matching a person or organization name.
+    """Build a q clause matching a person or organization name."""
+    return f"{field}:{name_expr(name)}"
+
+
+def name_expr(name: str) -> str:
+    """Build the part of a name clause that follows "field:".
 
     A multi-word name is normally sent as a quoted exact phrase. But ODP
     ignores "*" and "?" inside a quoted phrase (live-verified 2026-10-14:
@@ -47,16 +58,82 @@ def name_clause(field: str, name: str) -> str:
     """
     name = name.strip()
     if " " not in name:
-        return f"{field}:{_query_word(name)}"
+        return _query_word(name)
     if "*" not in name and "?" not in name:
         phrase = name.replace("\\", "\\\\").replace('"', '\\"')
-        return f'{field}:"{phrase}"'
-    terms = [
+        return f'"{phrase}"'
+    return _and_group([
+        _query_word(word)
+        for word in name.split()
+        if any(ch.isalnum() for ch in word)
+    ])
+
+
+def _and_group(terms: Sequence[str]) -> str:
+    """One term bare, several as (a AND b)."""
+    return terms[0] if len(terms) == 1 else f"({' AND '.join(terms)})"
+
+
+def has_apostrophe(name: str) -> bool:
+    """True if the name has a straight, curly or backtick apostrophe."""
+    return bool(_APOSTROPHES.search(name))
+
+
+def prefix_terms(name: str) -> List[str]:
+    """Split a name into word prefixes such as ["Raytheon*", "Co*"].
+
+    Each word is cut at its first apostrophe, so "Children's" becomes
+    "Children*" and also matches the stored spellings "Children’s",
+    "CHILDRENS", "CHILDREN?S" and "CHILDREN;S" (live-verified 2026-10-14).
+    Punctuation splits a word into its runs of letters and digits, as the
+    search index does ("Hewlett-Packard" -> "Hewlett*", "Packard*").
+    """
+    terms = []
+    for word in name.split():
+        word = _APOSTROPHES.split(word, maxsplit=1)[0]
+        terms.extend(f"{run}*" for run in _LETTER_RUNS.findall(word))
+    return terms
+
+
+def prefix_expr(name: str) -> Optional[str]:
+    """Every word of the name as a prefix, ANDed; None if no words."""
+    terms = prefix_terms(name)
+    return _and_group(terms) if terms else None
+
+
+def looser_name_exprs(name: str) -> List[Tuple[str, str]]:
+    """Forms of a name looser than name_expr(name), as (label, expr).
+
+    Used when a name search finds nothing (live-verified 2026-10-14):
+    - all words in any order: "Jodele Sonata" -> 23, "Raytheon Co" -> 7
+    - every word as a prefix: "Raytheon Co" -> 9448 ("Raytheon Company")
+    - each word left out in turn, for 2 to MAX_WORDS_TO_DROP words:
+      "Cincinnati Childrens Hospital" -> 0 in every form above, but 44
+      without "Childrens"
+    Forms that repeat an earlier one, or the original, are left out.
+    """
+    words = [
         _query_word(word)
         for word in name.split()
         if any(ch.isalnum() for ch in word)
     ]
-    return f"{field}:({' AND '.join(terms)})"
+    prefixes = prefix_terms(name)
+    forms = []
+    if len(words) > 1:
+        forms.append(("all words, in any order", _and_group(words)))
+    if prefixes:
+        forms.append(("every word as a prefix", _and_group(prefixes)))
+    if 2 <= len(prefixes) <= MAX_WORDS_TO_DROP:
+        for i, term in enumerate(prefixes):
+            rest = prefixes[:i] + prefixes[i + 1:]
+            forms.append((f"without {term.rstrip('*')}", _and_group(rest)))
+    seen = {name_expr(name)}
+    looser = []
+    for label, expr in forms:
+        if expr not in seen:
+            seen.add(expr)
+            looser.append((label, expr))
+    return looser
 
 
 def and_join(query: Optional[str], clauses: Sequence[str]) -> Optional[str]:

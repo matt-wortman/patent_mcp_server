@@ -14,12 +14,24 @@ import logging
 from typing import Any, Optional, Dict
 
 from patent_mcp_server.util.http import make_logged_client, request_json
-from patent_mcp_server.util.query import and_join, name_clause
+from patent_mcp_server.util.query import and_join, name_expr
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import HTTPMethods, Defaults, PTABTrialTypes
 
 logger = logging.getLogger('ptab_client')
 
+
+
+PARTY_NAME_FIELDS = (
+    "regularPetitionerData.realPartyInInterestName",
+    "patentOwnerData.realPartyInInterestName",
+)
+
+
+def party_clause_for(expr: str) -> str:
+    """A q clause matching a name expression as petitioner OR patent owner."""
+    petitioner, owner = (f"{field}:{expr}" for field in PARTY_NAME_FIELDS)
+    return f"({petitioner} OR {owner})"
 
 class PTABClient:
     """Client for the USPTO PTAB API v3.
@@ -108,6 +120,8 @@ class PTABClient:
         status: Optional[str] = None,
         offset: int = Defaults.SEARCH_START,
         limit: int = Defaults.API_LIMIT,
+        party_clause: Optional[str] = None,
+        fields: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search PTAB trial proceedings.
 
@@ -131,6 +145,10 @@ class PTABClient:
                 trialMetaData.trialStatusCategory clause
             offset: Starting position for pagination
             limit: Maximum results to return
+            party_clause: A ready-built party clause used in place of the
+                one built from party_name (for looser-name searches)
+            fields: Comma-separated fields to return instead of whole
+                records
 
         Returns:
             Dictionary containing search results
@@ -142,14 +160,10 @@ class PTABClient:
             q_parts.append(f"trialMetaData.trialTypeCode:{trial_type}")
         if patent_number:
             q_parts.append(f"patentOwnerData.patentNumber:{patent_number}")
-        if party_name:
-            petitioner = name_clause(
-                "regularPetitionerData.realPartyInInterestName", party_name
-            )
-            owner = name_clause(
-                "patentOwnerData.realPartyInInterestName", party_name
-            )
-            q_parts.append(f"({petitioner} OR {owner})")
+        if party_clause:
+            q_parts.append(party_clause)
+        elif party_name:
+            q_parts.append(party_clause_for(name_expr(party_name)))
         if filing_date_from or filing_date_to:
             q_parts.append(
                 "trialMetaData.petitionFilingDate:"
@@ -161,6 +175,8 @@ class PTABClient:
         q = and_join(query, q_parts)
         if q:
             params["q"] = q
+        if fields:
+            params["fields"] = fields
 
         return await self._search("/proceedings/search", params)
 

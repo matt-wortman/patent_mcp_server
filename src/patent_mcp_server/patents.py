@@ -15,6 +15,7 @@ The server uses stdio transport for Claude Code/Cursor integration.
 The package version lives in pyproject.toml and is exposed at runtime as
 patent_mcp_server.config.PACKAGE_VERSION.
 """
+import asyncio
 import atexit
 import json
 import logging
@@ -23,7 +24,7 @@ import re
 import shutil
 import sys
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -38,7 +39,15 @@ from patent_mcp_server.util.errors import (
     is_no_match,
     is_unreadable_search,
 )
-from patent_mcp_server.util.query import and_join, name_clause
+from patent_mcp_server.util.query import (
+    and_join,
+    has_apostrophe,
+    looser_name_exprs,
+    name_clause,
+    name_expr,
+    prefix_expr,
+    prefix_terms,
+)
 from patent_mcp_server.util.validation import (
     validate_patent_number,
     validate_app_number,
@@ -72,7 +81,11 @@ from patent_mcp_server.uspto.document_download import (
     validate_download_options,
     validate_record_growth,
 )
-from patent_mcp_server.uspto.ptab_client import PTABClient
+from patent_mcp_server.uspto.ptab_client import (
+    PARTY_NAME_FIELDS,
+    PTABClient,
+    party_clause_for,
+)
 from patent_mcp_server.uspto.dsapi_client import DsapiClient
 
 # Maximum page size accepted at ODP/PTAB tool boundaries. Responses are
@@ -551,6 +564,138 @@ def _search_reply(
         k: v for k, v in request.items() if k not in _PAGING_KEYS
     }
     return check_and_truncate(reply)
+
+
+# Records fetched from each looser-name search to show which stored names
+# it matched.
+NAME_SAMPLE_SIZE = 5
+# Looser-name searches run at once. Six at once drew a 429 from USPTO
+# (live 2026-10-14), which the retry absorbs only after a 5 s wait.
+NAME_SEARCHES_AT_ONCE = 3
+
+_LOOSER_NAMES_NOTE = (
+    "Looser forms of the name were also searched; see name_variants. "
+    "They are not exact matches: check names_found to judge whether they "
+    "are the same person or organization. To run one, put its clause in "
+    "query in place of the name input, keeping your other inputs."
+)
+
+
+def _sample_names(
+    records: List[Dict[str, Any]],
+    names_in: Callable[[Dict[str, Any]], List[str]],
+    typed_name: str,
+) -> List[str]:
+    """Distinct stored names in `records` that share a word with the typed name.
+
+    A word is shared when a stored word starts with one of the typed name's
+    word prefixes ("Children*" matches "CHILDRENS"), ignoring case. This
+    leaves out co-inventors and the other party of a trial.
+    """
+    stems = [t.rstrip("*").lower() for t in prefix_terms(typed_name)]
+    found: List[str] = []
+    for record in records:
+        for stored in names_in(record):
+            words = re.findall(r"[^\W_]+", stored.lower())
+            if stored not in found and any(
+                word.startswith(stem) for word in words for stem in stems
+            ):
+                found.append(stored)
+    return found[:NAME_SAMPLE_SIZE]
+
+
+async def _check_looser_names(
+    reply: Dict[str, Any],
+    offset: int,
+    names: Dict[str, Optional[str]],
+    clause_for: Callable[[str, str], str],
+    run: Callable[[str, str], Awaitable[Dict[str, Any]]],
+    records_in: Callable[[Dict[str, Any]], List[Dict[str, Any]]],
+    names_in: Callable[[str, Dict[str, Any]], List[str]],
+) -> Dict[str, Any]:
+    """Add `name_variants` to a name search's reply when it may have missed records.
+
+    If the search found nothing, looser forms of each name are searched
+    (see looser_name_exprs). If it found records but a name has an
+    apostrophe, one more search counts the records the exact name missed:
+    stored spellings of an apostrophe vary (live 2026-10-14: "Children's
+    Hospital Medical Center" missed 27 records stored as "CHILDRENS ...").
+    Each looser search keeps every other input and replaces only that
+    name's clause. Runs only on the first page: USPTO also reports a page
+    past the last record as zero matches.
+
+    Args:
+        reply: The tool's reply, from _search_reply.
+        offset: The reply's starting position.
+        names: Name input (e.g. "assignee_name") -> the name as searched.
+        clause_for: (input, name expression) -> that input's q clause.
+        run: (input, clause) -> raw USPTO result of the same search with
+            that clause in place of the input's name clause.
+        records_in: Raw result -> its list of records.
+        names_in: (input, record) -> the record's stored names for that input.
+    """
+    if reply.get("error") or offset != 0:
+        return reply
+    found_nothing = reply.get("total", 0) == 0
+    checks = []  # (input, form, clause shown to the caller, clause searched)
+    for input_name, name in names.items():
+        if not name:
+            continue
+        if found_nothing:
+            for form, expr in looser_name_exprs(name):
+                clause = clause_for(input_name, expr)
+                checks.append((input_name, form, clause, clause))
+        elif has_apostrophe(name):
+            expr = prefix_expr(name)
+            if expr and expr != name_expr(name):
+                looser = clause_for(input_name, expr)
+                exact = clause_for(input_name, name_expr(name))
+                checks.append((
+                    input_name,
+                    "every word as a prefix",
+                    looser,
+                    f"({looser} AND NOT {exact})",
+                ))
+    if not checks:
+        return reply
+
+    gate = asyncio.Semaphore(NAME_SEARCHES_AT_ONCE)
+
+    async def gated(input_name: str, searched: str) -> Dict[str, Any]:
+        async with gate:
+            return await run(input_name, searched)
+
+    raws = await asyncio.gather(
+        *(gated(input_name, searched) for input_name, _, _, searched in checks)
+    )
+    variants = []
+    for (input_name, form, shown, _), raw in zip(checks, raws):
+        entry: Dict[str, Any] = {"input": input_name, "form": form, "clause": shown}
+        if is_no_match(raw):
+            count, records = 0, []
+        elif is_error(raw) or is_unreadable_search(raw):
+            entry["error"] = raw.get("message") or "USPTO did not answer this search"
+            variants.append(entry)
+            continue
+        else:
+            count, records = raw.get("count", 0), records_in(raw)
+        if not found_nothing and count == 0:
+            continue
+        entry["missed_by_exact_name" if not found_nothing else "total"] = count
+        entry["names_found"] = _sample_names(
+            records,
+            lambda record: names_in(input_name, record),
+            names[input_name] or "",
+        )
+        variants.append(entry)
+    if variants:
+        reply["name_variants"] = variants
+        reply["message"] = (
+            f"{reply['message']} {_LOOSER_NAMES_NOTE}"
+            if reply.get("message")
+            else _LOOSER_NAMES_NOTE
+        )
+    return reply
 
 
 async def _search_patent_by_number(patent_number: str) -> Dict[str, Any]:
@@ -1622,30 +1767,23 @@ async def odp_search_applications(
 
     Returns:
         Normalized response with matching applications.
+
+        NAME CHECKS: if an inventor_name or assignee_name search finds
+        nothing, looser forms of the name (all words in any order, every
+        word as a prefix, each word left out in turn) are also searched,
+        with your other inputs unchanged. If it finds records but the name
+        has an apostrophe, one more search counts records stored under
+        other spellings of it (e.g. "CHILDRENS", "Children’s"). Results
+        are in name_variants: each form's clause, its count ("total", or
+        "missed_by_exact_name"), and up to 5 stored names it matched.
+        These are NOT exact matches; check names_found, and rerun a
+        clause by putting it in query in place of the name input. Runs on
+        the first page only (offset 0).
     """
     try:
         validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
     except ValueError as e:
         return ApiError.validation_error(str(e))
-
-    body: Dict[str, Any] = {
-        "pagination": {"offset": offset, "limit": limit},
-    }
-
-    # Build q string: combine free-form query with field-specific DSL using AND
-    q_parts = []
-    if inventor_name:
-        q_parts.append(name_clause(
-            "applicationMetaData.inventorBag.inventorNameText",
-            _normalize_inventor_name(inventor_name),
-        ))
-    if assignee_name:
-        q_parts.append(name_clause(
-            "applicationMetaData.firstApplicantName", assignee_name
-        ))
-    q = and_join(query, q_parts)
-    if q:
-        body["q"] = q
 
     # Build filters array for exact-match fields
     filters = []
@@ -1684,17 +1822,77 @@ async def odp_search_applications(
             "name": "applicationMetaData.groupArtUnitNumber",
             "value": [str(group_art_unit)],
         })
-    if filters:
-        body["filters"] = filters
 
-    _apply_date_range(
-        body, "applicationMetaData.filingDate", filing_date_from, filing_date_to
-    )
+    names = {
+        "inventor_name": (
+            _normalize_inventor_name(inventor_name) if inventor_name else None
+        ),
+        "assignee_name": assignee_name,
+    }
 
+    def clause_for(input_name: str, expr: str) -> str:
+        return f"{_APPLICATION_NAME_FIELDS[input_name]}:{expr}"
+
+    def build_body(
+        name_clauses: Dict[str, str], offset: int, limit: int
+    ) -> Dict[str, Any]:
+        """The POST body, with the free-form query and name clauses ANDed."""
+        body: Dict[str, Any] = {
+            "pagination": {"offset": offset, "limit": limit},
+        }
+        q = and_join(query, list(name_clauses.values()))
+        if q:
+            body["q"] = q
+        if filters:
+            body["filters"] = filters
+        _apply_date_range(
+            body, "applicationMetaData.filingDate", filing_date_from, filing_date_to
+        )
+        return body
+
+    name_clauses = {
+        input_name: clause_for(input_name, name_expr(name))
+        for input_name, name in names.items()
+        if name
+    }
+    body = build_body(name_clauses, offset, limit)
     url = f"{config.API_BASE_URL}/api/v1/patent/applications/search"
     result = await api_client.make_request(url, method="POST", data=body)
+    reply = _search_reply(result, "odp", offset, limit, body)
 
-    return _search_reply(result, "odp", offset, limit, body)
+    async def run(input_name: str, clause: str) -> Dict[str, Any]:
+        sample = build_body({**name_clauses, input_name: clause}, 0, NAME_SAMPLE_SIZE)
+        sample["fields"] = [_APPLICATION_NAME_SAMPLE_FIELDS[input_name]]
+        return await api_client.make_request(url, method="POST", data=sample)
+
+    return await _check_looser_names(
+        reply, offset, names, clause_for, run,
+        records_in=lambda raw: raw.get("patentFileWrapperDataBag") or [],
+        names_in=_application_stored_names,
+    )
+
+
+_APPLICATION_NAME_FIELDS = {
+    "inventor_name": "applicationMetaData.inventorBag.inventorNameText",
+    "assignee_name": "applicationMetaData.firstApplicantName",
+}
+_APPLICATION_NAME_SAMPLE_FIELDS = {
+    "inventor_name": "applicationMetaData.inventorBag",
+    "assignee_name": "applicationMetaData.firstApplicantName",
+}
+
+
+def _application_stored_names(input_name: str, record: Dict[str, Any]) -> List[str]:
+    """The stored inventor names or first-applicant name of one application."""
+    meta = record.get("applicationMetaData") or {}
+    if input_name == "inventor_name":
+        return [
+            inventor["inventorNameText"]
+            for inventor in meta.get("inventorBag") or []
+            if inventor.get("inventorNameText")
+        ]
+    applicant = meta.get("firstApplicantName")
+    return [applicant] if applicant else []
 
 
 @mcp.tool()
@@ -2103,7 +2301,9 @@ async def ptab_search_proceedings(
         trial_type: Type of trial (IPR, PGR, CBM, DER)
         patent_number: Patent number being challenged
         party_name: Real-party-in-interest name, matched against
-            petitioner or patent owner
+            petitioner or patent owner. A multi-word name without * or ?
+            must match as an exact phrase; with * or ? each word is matched
+            separately (e.g., "Samsung Elec*")
         filing_date_from: Petition filing date range start (YYYY-MM-DD)
         filing_date_to: Petition filing date range end (YYYY-MM-DD)
         status: Proceeding status (e.g., Pending, Instituted, Terminated,
@@ -2113,6 +2313,11 @@ async def ptab_search_proceedings(
 
     Returns:
         Normalized response with matching proceedings.
+
+        NAME CHECKS: if a party_name search finds nothing, or the name has
+        an apostrophe, looser forms of the name are also searched, exactly
+        as described for odp_search_applications; results are in
+        name_variants. They are NOT exact matches; check names_found.
     """
     try:
         validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
@@ -2136,8 +2341,39 @@ async def ptab_search_proceedings(
         offset=offset,
         limit=limit,
     )
+    reply = _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
-    return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
+    async def run(_input_name: str, clause: str) -> Dict[str, Any]:
+        return await ptab_client.search_proceedings(
+            query=query,
+            trial_type=trial_type,
+            patent_number=patent_number,
+            filing_date_from=filing_date_from,
+            filing_date_to=filing_date_to,
+            status=status,
+            offset=0,
+            limit=NAME_SAMPLE_SIZE,
+            party_clause=clause,
+            fields=",".join(PARTY_NAME_FIELDS),
+        )
+
+    return await _check_looser_names(
+        reply, offset, {"party_name": party_name},
+        clause_for=lambda _input_name, expr: party_clause_for(expr),
+        run=run,
+        records_in=lambda raw: raw.get("patentTrialProceedingDataBag") or [],
+        names_in=_party_stored_names,
+    )
+
+
+def _party_stored_names(_input_name: str, record: Dict[str, Any]) -> List[str]:
+    """The stored petitioner and patent-owner names of one trial."""
+    names = []
+    for side in ("regularPetitionerData", "patentOwnerData"):
+        name = (record.get(side) or {}).get("realPartyInInterestName")
+        if name:
+            names.append(name)
+    return names
 
 
 @mcp.tool()
