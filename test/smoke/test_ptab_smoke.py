@@ -157,3 +157,11 @@ async def test_ptab_party_name_wildcard_matches():
     assert exact["total"] >= 900
     assert multi_word["total"] >= exact["total"]
     assert one_word["total"] >= multi_word["total"]
+
+
+
+async def test_ptab_party_name_with_query_syntax_character_still_searches():
+    """A stray ':' used to make a search USPTO could not read."""
+    result = await ptab_search_proceedings(party_name="Raytheon:", limit=1)
+    assert result.get("error") is not True, result
+    assert result["success"] is True

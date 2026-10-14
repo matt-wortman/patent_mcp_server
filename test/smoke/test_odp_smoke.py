@@ -513,3 +513,27 @@ async def test_multi_word_inventor_wildcard_matches():
     wildcard = await odp_search_applications(inventor_name="Sonata Jodel*", limit=1)
     assert exact["total"] >= 1
     assert wildcard["total"] >= exact["total"]
+
+
+
+async def test_name_with_quotation_marks_is_sent_as_one_phrase():
+    """Inner quotation marks must not split the name into loose pieces.
+
+    Live 2026-10-14: unescaped, 'Sonata "Sunny" Jodele' found 4019
+    applications (any piece matched) while "Sonata Jodele" found 23.
+    """
+    exact = await odp_search_applications(inventor_name="Sonata Jodele", limit=1)
+    nickname = await odp_search_applications(
+        inventor_name='Sonata "Sunny" Jodele', limit=1
+    )
+    assert exact["total"] >= 1
+    assert nickname.get("error") is not True, nickname
+    assert nickname["total"] <= exact["total"]
+
+
+async def test_name_with_query_syntax_character_still_searches():
+    """A stray ')' used to make a search USPTO could not read."""
+    plain = await odp_search_applications(assignee_name="Raytheon", limit=1)
+    stray = await odp_search_applications(assignee_name="Raytheon)", limit=1)
+    assert stray.get("error") is not True, stray
+    assert stray["total"] == plain["total"]

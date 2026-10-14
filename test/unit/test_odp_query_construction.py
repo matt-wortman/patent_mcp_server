@@ -174,3 +174,34 @@ async def test_inventor_wildcard_applies_after_comma_normalization(captured):
 async def test_inventor_multi_word_without_wildcard_stays_exact_phrase(captured):
     await patents.odp_search_applications(inventor_name="Jodele, Sonata")
     assert captured["body"]["q"] == f'{INVENTOR}:"Sonata Jodele"'
+
+
+
+# Without a wildcard, a name is still escaped: a raw '"' split the phrase
+# (live 2026-10-14: 'Sonata "Sunny" Jodele' -> 4019 instead of 0) and a raw
+# ')' or ':' made a search ODP could not read. Escaping leaves ordinary
+# names alone (Hewlett-Packard -> 34528 bare or escaped).
+
+async def test_single_word_name_escapes_query_syntax_characters(captured):
+    await patents.odp_search_applications(assignee_name="Raytheon)")
+    assert captured["body"]["q"] == f"{APPLICANT}:Raytheon\\)"
+
+
+async def test_single_word_name_lowercases_operator_word(captured):
+    await patents.odp_search_applications(assignee_name="OR")
+    assert captured["body"]["q"] == f"{APPLICANT}:or"
+
+
+async def test_exact_phrase_escapes_embedded_quotation_marks(captured):
+    await patents.odp_search_applications(inventor_name='Sonata "Sunny" Jodele')
+    assert captured["body"]["q"] == f'{INVENTOR}:"Sonata \\"Sunny\\" Jodele"'
+
+
+async def test_exact_phrase_escapes_backslash(captured):
+    await patents.odp_search_applications(assignee_name="Acme \\ Corp")
+    assert captured["body"]["q"] == f'{APPLICANT}:"Acme \\\\ Corp"'
+
+
+async def test_name_surrounding_spaces_are_ignored(captured):
+    await patents.odp_search_applications(assignee_name="  Raytheon  ")
+    assert captured["body"]["q"] == f"{APPLICANT}:Raytheon"

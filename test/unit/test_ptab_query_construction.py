@@ -82,9 +82,17 @@ async def test_proceedings_single_word_party_wildcard_is_not_quoted(client):
     )
 
 
-async def test_proceedings_party_name_strips_embedded_quotes(client):
+async def test_proceedings_party_name_escapes_embedded_quotes(client):
     await client.search_proceedings(party_name='Ray" OR x:"y')
-    assert '"Ray  OR x: y"' in client.captured["params"]["q"]
+    assert '"Ray\\" OR x:\\"y"' in client.captured["params"]["q"]
+
+
+async def test_proceedings_single_word_party_name_escapes_syntax(client):
+    await client.search_proceedings(party_name="Raytheon:")
+    assert client.captured["params"]["q"] == (
+        "(regularPetitionerData.realPartyInInterestName:Raytheon\\:"
+        " OR patentOwnerData.realPartyInInterestName:Raytheon\\:)"
+    )
 
 
 async def test_proceedings_filing_date_range_clause(client):

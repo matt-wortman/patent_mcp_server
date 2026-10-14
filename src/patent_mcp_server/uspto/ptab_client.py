@@ -145,11 +145,12 @@ class PTABClient:
         if patent_number:
             q_parts.append(f"patentOwnerData.patentNumber:{patent_number}")
         if party_name:
-            name = party_name.replace('"', " ").strip()
             petitioner = name_clause(
-                "regularPetitionerData.realPartyInInterestName", name
+                "regularPetitionerData.realPartyInInterestName", party_name
             )
-            owner = name_clause("patentOwnerData.realPartyInInterestName", name)
+            owner = name_clause(
+                "patentOwnerData.realPartyInInterestName", party_name
+            )
             q_parts.append(f"({petitioner} OR {owner})")
         if filing_date_from or filing_date_to:
             q_parts.append(
