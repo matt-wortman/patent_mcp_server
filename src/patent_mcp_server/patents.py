@@ -32,7 +32,12 @@ from patent_mcp_server.config import config
 from patent_mcp_server.constants import (
     Sources, Fields, PTABTrialTypes
 )
-from patent_mcp_server.util.errors import ApiError, is_error, is_no_match
+from patent_mcp_server.util.errors import (
+    ApiError,
+    is_error,
+    is_no_match,
+    is_unreadable_search,
+)
 from patent_mcp_server.util.query import name_clause
 from patent_mcp_server.util.validation import (
     validate_patent_number,
@@ -518,8 +523,9 @@ def _search_reply(
 ) -> Dict[str, Any]:
     """Build an ODP or PTAB search tool's reply from USPTO's answer.
 
-    Zero matches (USPTO's 404) become an empty result and other errors pass
-    through. Every reply, including those two, carries `query_sent`: the
+    Zero matches (USPTO's 404) become an empty result, other errors pass
+    through, and a search USPTO could not parse becomes an error instead of
+    a fake result. Every reply, including those, carries `query_sent`: the
     request as sent to USPTO without paging, so the caller can see exactly
     how their input was turned into a search.
     """
@@ -527,6 +533,16 @@ def _search_reply(
         reply = ResponseEnvelope.no_matches(source, offset, limit)
     elif is_error(result):
         reply = result
+    elif is_unreadable_search(result):
+        reply = ApiError.create(
+            message=(
+                "USPTO could not read this search and returned no records. "
+                "Check query_sent for an unbalanced bracket or quotation "
+                "mark, or a character such as : ( ) that needs a backslash "
+                "before it."
+            ),
+            error_code="UNREADABLE_SEARCH",
+        )
     elif source == "ptab":
         reply = ResponseEnvelope.from_ptab(result, offset, limit)
     else:

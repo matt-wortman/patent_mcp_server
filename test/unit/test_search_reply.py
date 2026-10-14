@@ -78,3 +78,13 @@ def test_oversized_reply_keeps_query_sent(monkeypatch, tmp_path):
     assert reply["_oversized"] is True
     assert reply["count"] == 3
     assert reply["query_sent"] == ODP_SENT
+
+
+@pytest.mark.parametrize("source", ["odp", "ptab"])
+def test_unreadable_search_becomes_error_with_query_sent(source):
+    unreadable = {"count": 0, "requestIdentifier": "b0997"}
+    reply = _search_reply(unreadable, source, 0, 2, ODP_BODY)
+    assert reply["error"] is True
+    assert reply["error_code"] == "UNREADABLE_SEARCH"
+    assert "could not read" in reply["message"]
+    assert reply["query_sent"] == ODP_SENT

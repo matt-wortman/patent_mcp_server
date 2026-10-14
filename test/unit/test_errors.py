@@ -1,7 +1,12 @@
 """Unit tests for error handling utilities."""
 import pytest
 
-from patent_mcp_server.util.errors import ApiError, is_error, is_no_match
+from patent_mcp_server.util.errors import (
+    ApiError,
+    is_error,
+    is_no_match,
+    is_unreadable_search,
+)
 
 
 # ============================================================================
@@ -527,3 +532,30 @@ def test_from_http_error_with_empty_message_field():
     )
 
     assert error["message"] == "Fallback error message"
+
+
+# ============================================================================
+# is_unreadable_search: USPTO's reply to a search it could not parse
+# ============================================================================
+
+@pytest.mark.unit
+def test_is_unreadable_search_true_for_reply_without_records_list():
+    """The exact reply ODP and PTAB gave on 2026-10-14 to an unbalanced
+    bracket: HTTP 200 with a count of 0 and no records list."""
+    assert is_unreadable_search({"count": 0, "requestIdentifier": "b0997"}) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("reply", [
+    {"count": 0, "patentFileWrapperDataBag": [], "requestIdentifier": "x"},
+    {"count": 2, "patentTrialProceedingDataBag": [{}, {}]},
+    {"count": 1, "results": [{}]},
+])
+def test_is_unreadable_search_false_when_records_list_present(reply):
+    assert is_unreadable_search(reply) is False
+
+
+@pytest.mark.unit
+def test_is_unreadable_search_false_for_errors():
+    """Errors (including zero-match 404s) are handled before this check."""
+    assert is_unreadable_search(ApiError.create("Not Found", status_code=404)) is False

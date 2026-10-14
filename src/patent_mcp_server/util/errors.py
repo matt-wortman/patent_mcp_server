@@ -168,3 +168,25 @@ def is_no_match(response: Dict[str, Any]) -> bool:
         True if the response is a 404 error, False otherwise
     """
     return is_error(response) and response.get("status_code") == 404
+
+
+def is_unreadable_search(response: Dict[str, Any]) -> bool:
+    """
+    Check if a search response is USPTO's reply to a search it could not parse.
+
+    ODP and PTAB do not reject a malformed q (an unbalanced bracket or
+    quotation mark, a stray colon): they answer HTTP 200 with a count of 0
+    and no records list at all (live-verified 2026-10-14). A real search
+    always carries a records list, and zero matches come back as a 404
+    (see is_no_match), so a success with no list means the search was not
+    understood.
+
+    Args:
+        response: Response dictionary from a search request
+
+    Returns:
+        True if the response is a success that carries no records list
+    """
+    if is_error(response):
+        return False
+    return not any(isinstance(value, list) for value in response.values())

@@ -63,6 +63,23 @@ async def test_zero_match_search_returns_empty_result(tool, source):
     assert "No records matched" in result["message"]
 
 
+
+# An unbalanced bracket USPTO cannot parse. It answers such a search with
+# HTTP 200, a count of 0 and no records list (live-verified 2026-10-14),
+# which the tools used to report as 1 fake result (ODP) or a quiet 0 (PTAB).
+UNREADABLE_QUERY = f"({NO_MATCH_QUERY}"
+
+
+@pytest.mark.parametrize(
+    "tool,source", SEARCH_TOOLS, ids=[t.__name__ for t, _ in SEARCH_TOOLS]
+)
+async def test_unreadable_search_is_reported_as_error(tool, source):
+    result = await tool(query=UNREADABLE_QUERY, limit=2)
+
+    assert result.get("error") is True, result
+    assert result["error_code"] == "UNREADABLE_SEARCH"
+    assert result["query_sent"]["q"] == UNREADABLE_QUERY
+
 async def test_zero_match_name_filter_returns_empty_result():
     """An applicant-name search with no matches returns an empty result.
 
