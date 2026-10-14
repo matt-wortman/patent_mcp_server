@@ -14,7 +14,7 @@ import logging
 from typing import Any, Optional, Dict
 
 from patent_mcp_server.util.http import make_logged_client, request_json
-from patent_mcp_server.util.query import name_clause
+from patent_mcp_server.util.query import and_join, name_clause
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import HTTPMethods, Defaults, PTABTrialTypes
 
@@ -138,8 +138,6 @@ class PTABClient:
         params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
         q_parts = []
-        if query:
-            q_parts.append(query)
         if trial_type and trial_type in PTABTrialTypes.ALL:
             q_parts.append(f"trialMetaData.trialTypeCode:{trial_type}")
         if patent_number:
@@ -160,8 +158,9 @@ class PTABClient:
         if status:
             status_value = status.replace('"', " ").strip()
             q_parts.append(f'trialMetaData.trialStatusCategory:"{status_value}"')
-        if q_parts:
-            params["q"] = " AND ".join(q_parts)
+        q = and_join(query, q_parts)
+        if q:
+            params["q"] = q
 
         return await self._search("/proceedings/search", params)
 
@@ -213,8 +212,6 @@ class PTABClient:
         params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
         q_parts = []
-        if query:
-            q_parts.append(query)
         if decision_type:
             type_prefix = decision_type.split()[0] if decision_type.split() else ""
             if type_prefix:
@@ -230,8 +227,9 @@ class PTABClient:
                 "documentData.documentFilingDate:"
                 f"[{decision_date_from or '*'} TO {decision_date_to or '*'}]"
             )
-        if q_parts:
-            params["q"] = " AND ".join(q_parts)
+        q = and_join(query, q_parts)
+        if q:
+            params["q"] = q
 
         return await self._search("/decisions/search", params)
 
@@ -268,12 +266,11 @@ class PTABClient:
         params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
         q_parts = []
-        if query:
-            q_parts.append(query)
         if proceeding_number:
             q_parts.append(f"trialNumber:{proceeding_number}")
-        if q_parts:
-            params["q"] = " AND ".join(q_parts)
+        q = and_join(query, q_parts)
+        if q:
+            params["q"] = q
 
         return await self._search("/documents/search", params)
 
@@ -311,14 +308,13 @@ class PTABClient:
         params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
         q_parts = []
-        if query:
-            q_parts.append(query)
         if appeal_number:
             q_parts.append(f"appealNumber:{appeal_number}")
         if app_num:
             q_parts.append(f"appellantData.applicationNumberText:{app_num}")
-        if q_parts:
-            params["q"] = " AND ".join(q_parts)
+        q = and_join(query, q_parts)
+        if q:
+            params["q"] = q
 
         return await self._search(
             "/decisions/search", params, base_url=self.appeals_url
@@ -358,12 +354,11 @@ class PTABClient:
         params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
         q_parts = []
-        if query:
-            q_parts.append(query)
         if interference_number:
             q_parts.append(f"interferenceNumber:{interference_number}")
-        if q_parts:
-            params["q"] = " AND ".join(q_parts)
+        q = and_join(query, q_parts)
+        if q:
+            params["q"] = q
 
         return await self._search(
             "/decisions/search", params, base_url=self.interferences_url

@@ -114,7 +114,49 @@ async def test_proceedings_open_ended_date_range_uses_wildcard(client):
 async def test_proceedings_combines_query_and_filters_with_and(client):
     await client.search_proceedings(query="foo", trial_type="IPR")
     assert client.captured["params"]["q"] == (
-        "foo AND trialMetaData.trialTypeCode:IPR"
+        "(foo) AND trialMetaData.trialTypeCode:IPR"
+    )
+
+
+# USPTO reads "A OR B AND C" as "B AND C" (live-verified 2026-10-14: PGR
+# or CBM trials filed in 2024 -> 0 bare, 41 in parentheses), so the
+# caller's text is put in parentheses before any filter is joined to it.
+
+async def test_proceedings_or_query_is_grouped_before_filters(client):
+    await client.search_proceedings(query="A OR B", filing_date_from="2024-01-01")
+    assert client.captured["params"]["q"] == (
+        "(A OR B) AND trialMetaData.petitionFilingDate:[2024-01-01 TO *]"
+    )
+
+
+async def test_query_alone_is_sent_unchanged(client):
+    await client.search_proceedings(query="A OR B")
+    assert client.captured["params"]["q"] == "A OR B"
+
+
+async def test_decisions_or_query_is_grouped_before_filters(client):
+    await client.search_decisions(query="A OR B", proceeding_number="IPR2023-00037")
+    assert client.captured["params"]["q"] == "(A OR B) AND trialNumber:IPR2023-00037"
+
+
+async def test_documents_or_query_is_grouped_before_filters(client):
+    await client.search_documents(query="A OR B", proceeding_number="IPR2023-00037")
+    assert client.captured["params"]["q"] == "(A OR B) AND trialNumber:IPR2023-00037"
+
+
+async def test_appeals_or_query_is_grouped_before_filters(client):
+    await client.search_appeal_decisions(query="A OR B", app_num="14643719")
+    assert client.captured["params"]["q"] == (
+        "(A OR B) AND appellantData.applicationNumberText:14643719"
+    )
+
+
+async def test_interferences_or_query_is_grouped_before_filters(client):
+    await client.search_interference_decisions(
+        query="A OR B", interference_number="106130"
+    )
+    assert client.captured["params"]["q"] == (
+        "(A OR B) AND interferenceNumber:106130"
     )
 
 

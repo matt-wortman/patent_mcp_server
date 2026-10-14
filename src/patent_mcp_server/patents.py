@@ -38,7 +38,7 @@ from patent_mcp_server.util.errors import (
     is_no_match,
     is_unreadable_search,
 )
-from patent_mcp_server.util.query import name_clause
+from patent_mcp_server.util.query import and_join, name_clause
 from patent_mcp_server.util.validation import (
     validate_patent_number,
     validate_app_number,
@@ -1634,8 +1634,6 @@ async def odp_search_applications(
 
     # Build q string: combine free-form query with field-specific DSL using AND
     q_parts = []
-    if query:
-        q_parts.append(query)
     if inventor_name:
         q_parts.append(name_clause(
             "applicationMetaData.inventorBag.inventorNameText",
@@ -1645,8 +1643,9 @@ async def odp_search_applications(
         q_parts.append(name_clause(
             "applicationMetaData.firstApplicantName", assignee_name
         ))
-    if q_parts:
-        body["q"] = " AND ".join(q_parts)
+    q = and_join(query, q_parts)
+    if q:
+        body["q"] = q
 
     # Build filters array for exact-match fields
     filters = []
@@ -1688,19 +1687,9 @@ async def odp_search_applications(
     if filters:
         body["filters"] = filters
 
-    # Build rangeFilters for date ranges
-    if filing_date_from and filing_date_to:
-        body["rangeFilters"] = [{
-            "field": "applicationMetaData.filingDate",
-            "valueFrom": filing_date_from,
-            "valueTo": filing_date_to,
-        }]
-    elif filing_date_from:
-        q_part = f"applicationMetaData.filingDate:>={filing_date_from}"
-        body["q"] = f"{body['q']} AND {q_part}" if "q" in body else q_part
-    elif filing_date_to:
-        q_part = f"applicationMetaData.filingDate:<={filing_date_to}"
-        body["q"] = f"{body['q']} AND {q_part}" if "q" in body else q_part
+    _apply_date_range(
+        body, "applicationMetaData.filingDate", filing_date_from, filing_date_to
+    )
 
     url = f"{config.API_BASE_URL}/api/v1/patent/applications/search"
     result = await api_client.make_request(url, method="POST", data=body)
@@ -1860,13 +1849,11 @@ async def odp_search_petition_decisions(
         "pagination": {"offset": offset, "limit": limit},
         "sort": sort,
     }
-    q_parts = []
-    if query:
-        q_parts.append(query)
-    if app_num:
-        q_parts.append(f"applicationNumberText:{app_num}")
-    if q_parts:
-        body["q"] = " AND ".join(q_parts)
+    q = and_join(
+        query, [f"applicationNumberText:{app_num}"] if app_num else []
+    )
+    if q:
+        body["q"] = q
 
     decisions = [d.upper() for d in _split_values(decision)]
     if decisions:

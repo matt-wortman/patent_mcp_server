@@ -205,3 +205,44 @@ async def test_exact_phrase_escapes_backslash(captured):
 async def test_name_surrounding_spaces_are_ignored(captured):
     await patents.odp_search_applications(assignee_name="  Raytheon  ")
     assert captured["body"]["q"] == f"{APPLICANT}:Raytheon"
+
+
+# --- Caller's OR search joined to filters --------------------------------
+# USPTO reads "A OR B AND C" as "B AND C" (live-verified 2026-10-14:
+# Raytheon design or plant applications -> 0 bare, 3 in parentheses), so
+# the caller's text is put in parentheses before any filter is joined.
+
+async def test_application_or_query_is_grouped_before_name(captured):
+    await patents.odp_search_applications(query="A OR B", assignee_name="Raytheon")
+    assert captured["body"]["q"] == f"(A OR B) AND {APPLICANT}:Raytheon"
+
+
+async def test_application_or_query_is_grouped_before_one_sided_date(captured):
+    await patents.odp_search_applications(
+        query="A OR B", filing_date_from="2025-01-01"
+    )
+    assert captured["body"]["q"] == (
+        "(A OR B) AND applicationMetaData.filingDate:>=2025-01-01"
+    )
+
+
+async def test_application_two_sided_date_uses_range_filters(captured):
+    await patents.odp_search_applications(
+        query="A OR B", filing_date_from="2025-01-01", filing_date_to="2025-06-30"
+    )
+    assert captured["body"]["q"] == "A OR B"
+    assert captured["body"]["rangeFilters"] == [{
+        "field": "applicationMetaData.filingDate",
+        "valueFrom": "2025-01-01",
+        "valueTo": "2025-06-30",
+    }]
+
+
+async def test_application_query_alone_is_sent_unchanged(captured):
+    await patents.odp_search_applications(query="A OR B")
+    assert captured["body"]["q"] == "A OR B"
+
+
+async def test_petition_or_query_is_grouped_before_application_number(captured):
+    await patents.odp_search_petition_decisions(query="A OR B", app_num="09756788")
+    assert captured["body"]["q"] == "(A OR B) AND applicationNumberText:09756788"
