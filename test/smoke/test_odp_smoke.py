@@ -484,3 +484,25 @@ async def test_odp_get_office_action_text_returns_full_letter():
     text = _load_oversized_response(result)["results"]["officeActionText"]
     assert len(text) > 1000, f"Expected the full letter, got {len(text)} chars"
     assert "EXAMINER'S AMENDMENT" in text
+
+
+# --- Multi-word name wildcards (live-verified 2026-10-14) -----------------
+# ODP ignores "*" inside a quoted phrase, so these returned 0 before the fix.
+
+async def test_multi_word_assignee_wildcard_matches_name_variants():
+    exact = await odp_search_applications(
+        assignee_name="Cincinnati Children's", limit=1
+    )
+    wildcard = await odp_search_applications(
+        assignee_name="Cincinnati Children*", limit=1
+    )
+    assert exact["total"] >= 43
+    # The wildcard also catches the curly-apostrophe spelling "Children’s".
+    assert wildcard["total"] > exact["total"]
+
+
+async def test_multi_word_inventor_wildcard_matches():
+    exact = await odp_search_applications(inventor_name="Sonata Jodele", limit=1)
+    wildcard = await odp_search_applications(inventor_name="Sonata Jodel*", limit=1)
+    assert exact["total"] >= 1
+    assert wildcard["total"] >= exact["total"]

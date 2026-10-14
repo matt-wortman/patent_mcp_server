@@ -122,3 +122,55 @@ async def test_petitions_two_sided_range_uses_range_filters(captured):
 async def test_petitions_one_sided_range_becomes_q_clause(captured):
     await patents.odp_search_petition_decisions(decision_date_to="2005-12-31")
     assert captured["body"]["q"] == "decisionDate:<=2005-12-31"
+
+
+# --- odp_search_applications: name fields --------------------------------
+# Live-verified 2026-10-14: ODP ignores "*" inside a quoted phrase
+# ("Cincinnati Children*" -> 0), but matches each word separately
+# ("(Cincinnati AND Children*)" -> 44). Names without a wildcard stay an
+# exact phrase.
+
+APPLICANT = "applicationMetaData.firstApplicantName"
+INVENTOR = "applicationMetaData.inventorBag.inventorNameText"
+
+
+async def test_single_word_name_is_sent_bare(captured):
+    await patents.odp_search_applications(assignee_name="Raytheon*")
+    assert captured["body"]["q"] == f"{APPLICANT}:Raytheon*"
+
+
+async def test_multi_word_name_without_wildcard_stays_exact_phrase(captured):
+    await patents.odp_search_applications(assignee_name="Cincinnati Children's")
+    assert captured["body"]["q"] == f'{APPLICANT}:"Cincinnati Children\'s"'
+
+
+async def test_multi_word_name_with_wildcard_matches_each_word(captured):
+    await patents.odp_search_applications(assignee_name="Cincinnati Children*")
+    assert captured["body"]["q"] == f"{APPLICANT}:(Cincinnati AND Children*)"
+
+
+async def test_wildcard_name_lowercases_words_odp_would_read_as_operators(captured):
+    await patents.odp_search_applications(assignee_name="Johnson AND Johnson*")
+    assert captured["body"]["q"] == f"{APPLICANT}:(Johnson AND and AND Johnson*)"
+
+
+async def test_wildcard_name_escapes_query_syntax_characters(captured):
+    await patents.odp_search_applications(assignee_name="Hewlett-Packard (US) Dev*")
+    assert captured["body"]["q"] == (
+        f"{APPLICANT}:(Hewlett\\-Packard AND \\(US\\) AND Dev*)"
+    )
+
+
+async def test_wildcard_name_drops_words_with_no_letters_or_digits(captured):
+    await patents.odp_search_applications(assignee_name="Smith & Nephew*")
+    assert captured["body"]["q"] == f"{APPLICANT}:(Smith AND Nephew*)"
+
+
+async def test_inventor_wildcard_applies_after_comma_normalization(captured):
+    await patents.odp_search_applications(inventor_name="Jodel*, Sonata")
+    assert captured["body"]["q"] == f"{INVENTOR}:(Sonata AND Jodel*)"
+
+
+async def test_inventor_multi_word_without_wildcard_stays_exact_phrase(captured):
+    await patents.odp_search_applications(inventor_name="Jodele, Sonata")
+    assert captured["body"]["q"] == f'{INVENTOR}:"Sonata Jodele"'

@@ -62,9 +62,14 @@ async def test_zero_match_search_returns_empty_result(tool, source):
 
 
 async def test_zero_match_name_filter_returns_empty_result():
-    """The case found in testing: an applicant-name variant with no matches."""
+    """An applicant-name search with no matches returns an empty result.
+
+    "Cincinnati Children*" was the original case, but it only matched
+    nothing because ODP ignored the wildcard inside quotes. A nonsense
+    name keeps this test about the empty result, not the wildcard.
+    """
     result = await odp_search_applications(
-        assignee_name="Cincinnati Children*",
+        assignee_name="Qxzvw Nonexistent Hospital*",
         filing_date_from="2023-01-01",
         limit=2,
     )

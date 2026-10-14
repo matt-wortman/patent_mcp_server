@@ -434,6 +434,38 @@ def _normalize_inventor_name(name: str) -> str:
     return f"{first} {last}"
 
 
+_QUERY_OPERATOR_WORDS = {"AND", "OR", "NOT"}
+_QUERY_SYNTAX_CHARS = re.compile(r'([+\-!(){}\[\]^"~:\\/&|])')
+
+
+def _name_clause(field: str, name: str) -> str:
+    """Build an ODP q clause matching a person or organization name.
+
+    A multi-word name is normally sent as a quoted exact phrase. But ODP
+    ignores "*" and "?" inside a quoted phrase (live-verified 2026-10-14:
+    "Cincinnati Children*" -> 0 matches), so a multi-word name with a
+    wildcard is instead sent as each word ANDed together:
+    field:(Cincinnati AND Children*) -> 44 matches. Words then need not
+    be adjacent or in order.
+
+    In that form, words ODP would read as operators (AND/OR/NOT) are
+    lowercased, query-syntax characters are escaped, and words with no
+    letters or digits (e.g. "&") are dropped.
+    """
+    if " " not in name:
+        return f"{field}:{name}"
+    if "*" not in name and "?" not in name:
+        return f'{field}:"{name}"'
+    terms = []
+    for word in name.split():
+        if not any(ch.isalnum() for ch in word):
+            continue
+        if word.upper() in _QUERY_OPERATOR_WORDS:
+            word = word.lower()
+        terms.append(_QUERY_SYNTAX_CHARS.sub(r"\\\1", word))
+    return f"{field}:({' AND '.join(terms)})"
+
+
 def _normalize_cpc_classification(cpc: str) -> str:
     """Normalize a CPC symbol for use in ODP filter queries.
 
@@ -1529,9 +1561,16 @@ async def odp_search_applications(
             "First Last" (e.g., "Sonata Jodele"). A comma-separated form
             "Last, First" (e.g., "Jodele, Sonata") is auto-normalized to
             "First Last" before querying. Plain "Last First" (no comma)
-            cannot be auto-detected and matches nothing. Wildcards (e.g., "Jodele*")
-            are not recommended as they match too broadly.
-        assignee_name: Filter by assignee/applicant name (supports wildcards with *)
+            cannot be auto-detected and matches nothing. Wildcards work the
+            same way as for assignee_name (e.g., "Sonata Jodel*"); a bare
+            surname wildcard such as "Jodele*" matches very broadly.
+        assignee_name: Filter by the FIRST-named applicant only (applicants
+            listed second or later, and later assignees, are not searched).
+            Without a wildcard, a multi-word name must match as an exact
+            phrase, so spelling variants are missed (e.g., "Children's" vs.
+            "Children’s" with a curly apostrophe). With * or ? anywhere in a
+            multi-word name, each word is matched separately, in any order
+            (e.g., "Cincinnati Children*" also finds both apostrophe forms).
         cpc_classification: Filter by Cooperative Patent Classification symbol
             (e.g., "C12N 15/63" for recombinant DNA vectors, "G06N3/08" for
             neural networks with backpropagation). Input is auto-normalized
@@ -1581,12 +1620,14 @@ async def odp_search_applications(
     if query:
         q_parts.append(query)
     if inventor_name:
-        normalized = _normalize_inventor_name(inventor_name)
-        val = f'"{normalized}"' if " " in normalized else normalized
-        q_parts.append(f"applicationMetaData.inventorBag.inventorNameText:{val}")
+        q_parts.append(_name_clause(
+            "applicationMetaData.inventorBag.inventorNameText",
+            _normalize_inventor_name(inventor_name),
+        ))
     if assignee_name:
-        val = f'"{assignee_name}"' if " " in assignee_name else assignee_name
-        q_parts.append(f"applicationMetaData.firstApplicantName:{val}")
+        q_parts.append(_name_clause(
+            "applicationMetaData.firstApplicantName", assignee_name
+        ))
     if q_parts:
         body["q"] = " AND ".join(q_parts)
 
