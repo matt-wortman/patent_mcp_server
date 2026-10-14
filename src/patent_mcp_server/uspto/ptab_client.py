@@ -79,6 +79,23 @@ class PTABClient:
             context="PTAB API request failed",
         )
 
+    async def _search(
+        self,
+        endpoint: str,
+        params: Dict[str, Any],
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run a search and attach the parameters sent as `query_sent`.
+
+        The search tools report this back to the caller, so any rewrite of
+        their input (quoting, added clauses) is visible in the reply.
+        """
+        result = await self._make_request(
+            endpoint, params=params, base_url=base_url
+        )
+        result["query_sent"] = params
+        return result
+
     async def search_proceedings(
         self,
         query: Optional[str] = None,
@@ -142,7 +159,7 @@ class PTABClient:
         if q_parts:
             params["q"] = " AND ".join(q_parts)
 
-        return await self._make_request("/proceedings/search", params=params)
+        return await self._search("/proceedings/search", params)
 
     async def get_proceeding(self, proceeding_number: str) -> Dict[str, Any]:
         """Get details of a specific PTAB proceeding.
@@ -212,7 +229,7 @@ class PTABClient:
         if q_parts:
             params["q"] = " AND ".join(q_parts)
 
-        return await self._make_request("/decisions/search", params=params)
+        return await self._search("/decisions/search", params)
 
     async def get_decision(self, decision_id: str) -> Dict[str, Any]:
         """Get details of a specific PTAB decision.
@@ -254,7 +271,7 @@ class PTABClient:
         if q_parts:
             params["q"] = " AND ".join(q_parts)
 
-        return await self._make_request("/documents/search", params=params)
+        return await self._search("/documents/search", params)
 
     async def get_proceeding_documents(self, proceeding_number: str) -> Dict[str, Any]:
         """Get all documents filed in one PTAB proceeding.
@@ -299,8 +316,8 @@ class PTABClient:
         if q_parts:
             params["q"] = " AND ".join(q_parts)
 
-        return await self._make_request(
-            "/decisions/search", params=params, base_url=self.appeals_url
+        return await self._search(
+            "/decisions/search", params, base_url=self.appeals_url
         )
 
     async def get_appeal_decisions(self, appeal_number: str) -> Dict[str, Any]:
@@ -344,8 +361,8 @@ class PTABClient:
         if q_parts:
             params["q"] = " AND ".join(q_parts)
 
-        return await self._make_request(
-            "/decisions/search", params=params, base_url=self.interferences_url
+        return await self._search(
+            "/decisions/search", params, base_url=self.interferences_url
         )
 
     async def get_interference_decisions(self, interference_number: str) -> Dict[str, Any]:

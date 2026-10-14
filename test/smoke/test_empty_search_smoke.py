@@ -58,6 +58,8 @@ async def test_zero_match_search_returns_empty_result(tool, source):
     assert result["source"] == source
     assert result["results"] == []
     assert result["total"] == 0
+    # The reply shows the search exactly as USPTO received it.
+    assert result["query_sent"]["q"] == NO_MATCH_QUERY
     assert "No records matched" in result["message"]
 
 

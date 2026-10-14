@@ -110,7 +110,8 @@ class ResponseEnvelope:
         response["message"] = (
             "No records matched this search. USPTO reports zero matches as "
             "'Not Found', so check spelling and the exact form of names and "
-            "phrases (field values are matched as stored)."
+            "phrases (field values are matched as stored). For search tools, "
+            "query_sent shows the search exactly as USPTO received it."
         )
         return response
 

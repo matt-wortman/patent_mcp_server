@@ -536,6 +536,38 @@ def _sort_clause(field: str, sort_order: str) -> list:
     return [{"field": field, "order": order}]
 
 
+# Request keys that page through results rather than choose them.
+_PAGING_KEYS = ("pagination", "offset", "limit")
+
+
+def _search_reply(
+    result: Dict[str, Any],
+    source: str,
+    offset: int,
+    limit: int,
+    request: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build an ODP or PTAB search tool's reply from USPTO's answer.
+
+    Zero matches (USPTO's 404) become an empty result and other errors pass
+    through. Every reply, including those two, carries `query_sent`: the
+    request as sent to USPTO without paging, so the caller can see exactly
+    how their input was turned into a search.
+    """
+    if is_no_match(result):
+        reply = ResponseEnvelope.no_matches(source, offset, limit)
+    elif is_error(result):
+        reply = result
+    elif source == "ptab":
+        reply = ResponseEnvelope.from_ptab(result, offset, limit)
+    else:
+        reply = ResponseEnvelope.from_odp(result, offset, limit)
+    reply["query_sent"] = {
+        k: v for k, v in request.items() if k not in _PAGING_KEYS
+    }
+    return check_and_truncate(reply)
+
+
 async def _search_patent_by_number(patent_number: str) -> Dict[str, Any]:
     """Search for a patent by number and return the patent document metadata."""
     query = f'patentNumber:"{patent_number}"'
@@ -1688,12 +1720,7 @@ async def odp_search_applications(
     url = f"{config.API_BASE_URL}/api/v1/patent/applications/search"
     result = await api_client.make_request(url, method="POST", data=body)
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("odp", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_odp(result, offset, limit))
+    return _search_reply(result, "odp", offset, limit, body)
 
 
 @mcp.tool()
@@ -1868,12 +1895,7 @@ async def odp_search_petition_decisions(
     url = f"{config.API_BASE_URL}/api/v1/petition/decisions/search"
     result = await api_client.make_request(url, method="POST", data=body)
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("odp", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_odp(result, offset, limit))
+    return _search_reply(result, "odp", offset, limit, body)
 
 
 @mcp.tool()
@@ -2003,12 +2025,7 @@ async def odp_search_office_actions(
     url = f"{config.API_BASE_URL}/api/v1/patent/office-action/search"
     result = await api_client.make_request(url, method="POST", data=body)
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("odp", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_odp(result, offset, limit))
+    return _search_reply(result, "odp", offset, limit, body)
 
 
 @mcp.tool()
@@ -2148,12 +2165,7 @@ async def ptab_search_proceedings(
         limit=limit,
     )
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("ptab", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+    return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
 @mcp.tool()
@@ -2212,12 +2224,7 @@ async def ptab_search_decisions(
         limit=limit,
     )
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("ptab", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+    return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
 @mcp.tool()
@@ -2261,12 +2268,7 @@ async def ptab_search_trial_documents(
         limit=limit,
     )
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("ptab", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+    return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
 @mcp.tool()
@@ -2330,12 +2332,7 @@ async def ptab_search_appeal_decisions(
         limit=limit,
     )
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("ptab", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+    return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
 @mcp.tool()
@@ -2390,12 +2387,7 @@ async def ptab_search_interference_decisions(
         limit=limit,
     )
 
-    if is_no_match(result):
-        return ResponseEnvelope.no_matches("ptab", offset, limit)
-    if is_error(result):
-        return result
-
-    return check_and_truncate(ResponseEnvelope.from_ptab(result, offset, limit))
+    return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
 @mcp.tool()

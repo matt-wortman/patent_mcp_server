@@ -133,3 +133,18 @@ async def test_decisions_open_ended_date_range_uses_wildcard(client):
 async def test_decisions_no_filters_sends_no_q(client):
     await client.search_decisions(offset=0, limit=25)
     assert client.captured["params"] == {"offset": 0, "limit": 25}
+
+
+# --- search sent to USPTO -------------------------------------------------
+
+@pytest.mark.parametrize("method,kwargs", [
+    ("search_proceedings", {"trial_type": "IPR"}),
+    ("search_decisions", {"proceeding_number": "IPR2023-00037"}),
+    ("search_documents", {"proceeding_number": "IPR2023-00037"}),
+    ("search_appeal_decisions", {"appeal_number": "2026002664"}),
+    ("search_interference_decisions", {"interference_number": "106130"}),
+])
+async def test_search_reply_carries_the_search_sent(client, method, kwargs):
+    result = await getattr(client, method)(limit=2, **kwargs)
+    assert result["query_sent"] == client.captured["params"]
+    assert result["query_sent"]["q"]

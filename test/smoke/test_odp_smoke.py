@@ -499,6 +499,13 @@ async def test_multi_word_assignee_wildcard_matches_name_variants():
     assert exact["total"] >= 43
     # The wildcard also catches the curly-apostrophe spelling "Children’s".
     assert wildcard["total"] > exact["total"]
+    # The reply shows how each name was sent: a phrase, or ANDed words.
+    assert exact["query_sent"]["q"] == (
+        'applicationMetaData.firstApplicantName:"Cincinnati Children\'s"'
+    )
+    assert wildcard["query_sent"]["q"] == (
+        "applicationMetaData.firstApplicantName:(Cincinnati AND Children*)"
+    )
 
 
 async def test_multi_word_inventor_wildcard_matches():
