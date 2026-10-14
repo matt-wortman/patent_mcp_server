@@ -321,13 +321,13 @@ surrounded by periods.
 - `q` - General query string
 - `applicationNumberText` - Application number
 - `patentNumber` - Patent number
-- `inventorName` - Inventor name (**"First Last" format required**, e.g., "Sonata Jodele"; "Last First" returns 404)
+- `inventorName` - Inventor name (**"First Last" format required**, e.g., "Sonata Jodele"; "Last First" matches nothing)
 - `assigneeName` - Assignee name
 - `appFilingDate` - Filing date range
 
 ### Inventor Name Format (IMPORTANT):
 - Use **"First Last"** order: `inventorName=Sonata Jodele`
-- **"Last First"** order returns 404 from the API
+- **"Last First"** order matches nothing (the search returns 0 results)
 - Wildcards (e.g., `Jodele*`) match too broadly and should be avoided
 
 ### Example:

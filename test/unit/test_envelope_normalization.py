@@ -69,3 +69,25 @@ def test_from_odp_finds_office_action_bag():
     assert result["count"] == 2
     assert result["total"] == 10
     assert result["results"] == [{"row": 0}, {"row": 1}]
+
+
+# --- no_matches: USPTO's 404 for an empty search, as a normal result ----
+
+def test_no_matches_is_an_empty_success():
+    result = ResponseEnvelope.no_matches("odp", offset=25, limit=10)
+
+    assert result["success"] is True
+    assert result["source"] == "odp"
+    assert result["results"] == []
+    assert result["count"] == 0
+    assert result["total"] == 0
+    assert result["has_more"] is False
+    assert result["offset"] == 25
+    assert result["limit"] == 10
+
+
+def test_no_matches_explains_the_empty_result():
+    """The note tells the caller this is zero matches, not a failure."""
+    result = ResponseEnvelope.no_matches("ptab")
+
+    assert "No records matched" in result["message"]

@@ -32,7 +32,7 @@ from patent_mcp_server.config import config
 from patent_mcp_server.constants import (
     Sources, Fields, PTABTrialTypes
 )
-from patent_mcp_server.util.errors import ApiError, is_error
+from patent_mcp_server.util.errors import ApiError, is_error, is_no_match
 from patent_mcp_server.util.validation import (
     validate_patent_number,
     validate_app_number,
@@ -1529,7 +1529,7 @@ async def odp_search_applications(
             "First Last" (e.g., "Sonata Jodele"). A comma-separated form
             "Last, First" (e.g., "Jodele, Sonata") is auto-normalized to
             "First Last" before querying. Plain "Last First" (no comma)
-            cannot be auto-detected and will 404. Wildcards (e.g., "Jodele*")
+            cannot be auto-detected and matches nothing. Wildcards (e.g., "Jodele*")
             are not recommended as they match too broadly.
         assignee_name: Filter by assignee/applicant name (supports wildcards with *)
         cpc_classification: Filter by Cooperative Patent Classification symbol
@@ -1547,7 +1547,7 @@ async def odp_search_applications(
         application_status: Filter by application status description.
             IMPORTANT: Values are case-sensitive exact phrases (e.g.,
             "Non Final Action Mailed", "Patented Case", "Docketed New Case").
-            Lowercase or partial phrases return 404. To discover valid
+            Lowercase or partial phrases match nothing. To discover valid
             values, use the get_status_code tool — the authoritative DSAPI
             status-code dataset has 233 records. Builds a filter entry
             against applicationMetaData.applicationStatusDescriptionText.
@@ -1647,6 +1647,8 @@ async def odp_search_applications(
     url = f"{config.API_BASE_URL}/api/v1/patent/applications/search"
     result = await api_client.make_request(url, method="POST", data=body)
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("odp", offset, limit)
     if is_error(result):
         return result
 
@@ -1825,6 +1827,8 @@ async def odp_search_petition_decisions(
     url = f"{config.API_BASE_URL}/api/v1/petition/decisions/search"
     result = await api_client.make_request(url, method="POST", data=body)
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("odp", offset, limit)
     if is_error(result):
         return result
 
@@ -1958,6 +1962,8 @@ async def odp_search_office_actions(
     url = f"{config.API_BASE_URL}/api/v1/patent/office-action/search"
     result = await api_client.make_request(url, method="POST", data=body)
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("odp", offset, limit)
     if is_error(result):
         return result
 
@@ -2101,6 +2107,8 @@ async def ptab_search_proceedings(
         limit=limit,
     )
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("ptab", offset, limit)
     if is_error(result):
         return result
 
@@ -2163,6 +2171,8 @@ async def ptab_search_decisions(
         limit=limit,
     )
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("ptab", offset, limit)
     if is_error(result):
         return result
 
@@ -2210,6 +2220,8 @@ async def ptab_search_trial_documents(
         limit=limit,
     )
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("ptab", offset, limit)
     if is_error(result):
         return result
 
@@ -2277,6 +2289,8 @@ async def ptab_search_appeal_decisions(
         limit=limit,
     )
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("ptab", offset, limit)
     if is_error(result):
         return result
 
@@ -2335,6 +2349,8 @@ async def ptab_search_interference_decisions(
         limit=limit,
     )
 
+    if is_no_match(result):
+        return ResponseEnvelope.no_matches("ptab", offset, limit)
     if is_error(result):
         return result
 

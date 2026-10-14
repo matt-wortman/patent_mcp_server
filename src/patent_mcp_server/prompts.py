@@ -63,7 +63,7 @@ Find patents from key players in the field:
 ```
 Use odp_search_applications:
 - Use "First Last" format for inventor names (e.g., "Sonata Jodele")
-- "Last First" format returns 404 from the ODP API
+- "Last First" format matches nothing (the search returns 0 results)
 - Avoid wildcards for inventor names (they match too broadly)
 ```
 

@@ -149,6 +149,38 @@ def test_list_still_oversized_saves_to_disk(tmp_download_dir):
     assert len(saved["results"]) == 10
 
 
+@pytest.mark.unit
+def test_disk_save_keeps_real_record_count(tmp_download_dir):
+    """The envelope count describes the records on disk, not the summary.
+
+    Regression: count was overwritten to 1, so a 10-record search saved to
+    disk reported "count: 1".
+    """
+    huge_items = [{"id": i, "blob": "y" * 5000} for i in range(10)]
+    response = ResponseEnvelope.success(
+        results=huge_items, source="ppubs", total=495, limit=5,
+    )
+
+    out = truncate_response(response, max_tokens=200, max_results=5)
+
+    assert out.get("_oversized") is True
+    assert out["count"] == 10
+    assert out["results"]["record_count"] == 10
+
+
+@pytest.mark.unit
+def test_disk_save_single_record_count(tmp_download_dir):
+    """A single oversized record reports one record, in envelope and summary."""
+    response = ResponseEnvelope.success(
+        results={f"field_{i}": "x" * 500 for i in range(50)}, source="odp",
+    )
+
+    out = truncate_response(response, max_tokens=100)
+
+    assert out["count"] == 1
+    assert out["results"]["record_count"] == 1
+
+
 # ----------------------------------------------------------------------
 # check_and_truncate respects config.TRUNCATE_LARGE_RESPONSES
 # ----------------------------------------------------------------------

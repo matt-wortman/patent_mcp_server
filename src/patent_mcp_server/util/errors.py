@@ -150,3 +150,21 @@ def is_error(response: Dict[str, Any]) -> bool:
         True if the response contains an error, False otherwise
     """
     return response.get("error", False) is True
+
+
+def is_no_match(response: Dict[str, Any]) -> bool:
+    """
+    Check if a search response is USPTO's 404 for "no matching records".
+
+    ODP and PTAB search endpoints answer a search with zero matches with
+    HTTP 404 and a body of just {"error": "Not Found"} — the same reply a
+    lookup gets for a record that does not exist. Only search tools should
+    use this: for a lookup, a 404 really is an error.
+
+    Args:
+        response: Response dictionary from a search request
+
+    Returns:
+        True if the response is a 404 error, False otherwise
+    """
+    return is_error(response) and response.get("status_code") == 404

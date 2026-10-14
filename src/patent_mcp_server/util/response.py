@@ -80,6 +80,41 @@ class ResponseEnvelope:
         return response
 
     @staticmethod
+    def no_matches(
+        source: str,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> Dict[str, Any]:
+        """Create the response for a search that matched no records.
+
+        ODP and PTAB report zero matches as HTTP 404 "Not Found"; search
+        tools convert that into this empty result so callers do not mistake
+        it for a failure.
+
+        Args:
+            source: Data source identifier (e.g., 'odp', 'ptab')
+            offset: Requested offset
+            limit: Requested limit
+
+        Returns:
+            Standardized empty response with an explanatory message
+        """
+        response = ResponseEnvelope.success(
+            results=[],
+            source=source,
+            count=0,
+            total=0,
+            offset=offset,
+            limit=limit,
+        )
+        response["message"] = (
+            "No records matched this search. USPTO reports zero matches as "
+            "'Not Found', so check spelling and the exact form of names and "
+            "phrases (field values are matched as stored)."
+        )
+        return response
+
+    @staticmethod
     def from_ppubs(
         raw_response: Dict[str, Any],
         offset: int = 0,
@@ -258,12 +293,15 @@ def _save_oversized_to_disk(
     if isinstance(results, dict):
         preview_keys = sorted(results.keys())[:20]
         shape = "dict"
+        record_count = 1
     elif isinstance(results, list):
         preview_keys = []
         shape = "list"
+        record_count = len(results)
     else:
         preview_keys = []
         shape = type(results).__name__
+        record_count = 0 if results is None else 1
 
     summary = {
         "_oversized": True,
@@ -271,6 +309,7 @@ def _save_oversized_to_disk(
         "file_path": file_path,
         "size_bytes": size_bytes,
         "estimated_tokens": est,
+        "record_count": record_count,
         "preview_keys": preview_keys,
         "_message": (
             "Response exceeded token budget; full payload saved to disk. "
@@ -287,8 +326,8 @@ def _save_oversized_to_disk(
     truncated["results"] = summary
     truncated["_oversized"] = True
     truncated["_oversized_file"] = file_path
-    # Overwrite count to reflect the summary (single envelope)
-    truncated["count"] = 1
+    # Keep the envelope's count: it describes the records saved on disk,
+    # which is what a caller paginating through results needs to know.
     return truncated
 
 

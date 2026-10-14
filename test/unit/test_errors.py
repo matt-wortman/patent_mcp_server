@@ -1,7 +1,7 @@
 """Unit tests for error handling utilities."""
 import pytest
 
-from patent_mcp_server.util.errors import ApiError, is_error
+from patent_mcp_server.util.errors import ApiError, is_error, is_no_match
 
 
 # ============================================================================
@@ -282,6 +282,42 @@ def test_is_error_none():
 def test_is_error_empty_dict():
     """Test is_error with empty dictionary."""
     assert is_error({}) is False
+
+
+# ============================================================================
+# No-match detection (USPTO answers an empty search with HTTP 404)
+# ============================================================================
+
+@pytest.mark.unit
+def test_is_no_match_true_for_upstream_404():
+    """The exact error shape a zero-match ODP or PTAB search produces."""
+    error = ApiError.from_http_error(
+        status_code=404,
+        response_text="",
+        response_json={"error": "Not Found"},
+    )
+
+    assert is_no_match(error) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status_code", [400, 401, 403, 500])
+def test_is_no_match_false_for_other_errors(status_code):
+    """Only a 404 means "no matching records"; other failures stay errors."""
+    error = ApiError.create(message="failed", status_code=status_code)
+
+    assert is_no_match(error) is False
+
+
+@pytest.mark.unit
+def test_is_no_match_false_for_error_without_status():
+    """A network or validation error carries no status code."""
+    assert is_no_match(ApiError.create(message="timed out")) is False
+
+
+@pytest.mark.unit
+def test_is_no_match_false_for_success():
+    assert is_no_match({"success": True, "results": []}) is False
 
 
 # ============================================================================
