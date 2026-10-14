@@ -139,3 +139,21 @@ async def test_ptab_get_interference_decisions_no_error():
 
     assert result.get("success") is True, f"Expected success, got: {result}"
     assert result.get("total", 0) >= 1, "Expected at least one decision"
+
+
+async def test_ptab_party_name_wildcard_matches():
+    """A '*' in a party name must work, in one word or several.
+
+    USPTO ignores '*' inside a quoted phrase (live-verified 2026-10-14):
+    "Samsung Elec*" and "Samsun*" each found 0 proceedings while the
+    exact name "Samsung Electronics Co., Ltd." found 996.
+    """
+    exact = await ptab_search_proceedings(
+        party_name="Samsung Electronics Co., Ltd.", limit=1
+    )
+    multi_word = await ptab_search_proceedings(party_name="Samsung Elec*", limit=1)
+    one_word = await ptab_search_proceedings(party_name="Samsun*", limit=1)
+
+    assert exact["total"] >= 900
+    assert multi_word["total"] >= exact["total"]
+    assert one_word["total"] >= multi_word["total"]

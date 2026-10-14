@@ -14,6 +14,7 @@ import logging
 from typing import Any, Optional, Dict
 
 from patent_mcp_server.util.http import make_logged_client, request_json
+from patent_mcp_server.util.query import name_clause
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import HTTPMethods, Defaults, PTABTrialTypes
 
@@ -121,7 +122,8 @@ class PTABClient:
             patent_number: Patent number involved in the proceeding;
                 built as a patentOwnerData.patentNumber:<value> clause
             party_name: Real-party-in-interest name, matched against
-                petitioner OR patent owner (quoted phrase)
+                petitioner OR patent owner (built by name_clause, so a
+                "*" or "?" wildcard works in one word or several)
             filing_date_from: Petition filing date range start (YYYY-MM-DD)
             filing_date_to: Petition filing date range end (YYYY-MM-DD)
             status: Proceeding status (e.g., Pending, Instituted,
@@ -144,10 +146,11 @@ class PTABClient:
             q_parts.append(f"patentOwnerData.patentNumber:{patent_number}")
         if party_name:
             name = party_name.replace('"', " ").strip()
-            q_parts.append(
-                f'(regularPetitionerData.realPartyInInterestName:"{name}"'
-                f' OR patentOwnerData.realPartyInInterestName:"{name}")'
+            petitioner = name_clause(
+                "regularPetitionerData.realPartyInInterestName", name
             )
+            owner = name_clause("patentOwnerData.realPartyInInterestName", name)
+            q_parts.append(f"({petitioner} OR {owner})")
         if filing_date_from or filing_date_to:
             q_parts.append(
                 "trialMetaData.petitionFilingDate:"

@@ -49,8 +49,36 @@ async def test_proceedings_trial_type_and_status_clauses(client):
 async def test_proceedings_party_name_matches_either_side(client):
     await client.search_proceedings(party_name="Raytheon")
     assert client.captured["params"]["q"] == (
-        '(regularPetitionerData.realPartyInInterestName:"Raytheon"'
-        ' OR patentOwnerData.realPartyInInterestName:"Raytheon")'
+        "(regularPetitionerData.realPartyInInterestName:Raytheon"
+        " OR patentOwnerData.realPartyInInterestName:Raytheon)"
+    )
+
+
+async def test_proceedings_multi_word_party_name_stays_exact_phrase(client):
+    await client.search_proceedings(party_name="Apple Inc.")
+    assert client.captured["params"]["q"] == (
+        '(regularPetitionerData.realPartyInInterestName:"Apple Inc."'
+        ' OR patentOwnerData.realPartyInInterestName:"Apple Inc.")'
+    )
+
+
+# USPTO ignores "*" inside a quoted phrase (live-verified 2026-10-14:
+# "Samsung Elec*" -> 0, (Samsung AND Elec*) -> 1119; "Samsun*" -> 0,
+# Samsun* -> 1201), so wildcard names must not be quoted.
+
+async def test_proceedings_multi_word_party_wildcard_matches_each_word(client):
+    await client.search_proceedings(party_name="Samsung Elec*")
+    assert client.captured["params"]["q"] == (
+        "(regularPetitionerData.realPartyInInterestName:(Samsung AND Elec*)"
+        " OR patentOwnerData.realPartyInInterestName:(Samsung AND Elec*))"
+    )
+
+
+async def test_proceedings_single_word_party_wildcard_is_not_quoted(client):
+    await client.search_proceedings(party_name="Samsun*")
+    assert client.captured["params"]["q"] == (
+        "(regularPetitionerData.realPartyInInterestName:Samsun*"
+        " OR patentOwnerData.realPartyInInterestName:Samsun*)"
     )
 
 

@@ -33,6 +33,7 @@ from patent_mcp_server.constants import (
     Sources, Fields, PTABTrialTypes
 )
 from patent_mcp_server.util.errors import ApiError, is_error, is_no_match
+from patent_mcp_server.util.query import name_clause
 from patent_mcp_server.util.validation import (
     validate_patent_number,
     validate_app_number,
@@ -432,38 +433,6 @@ def _normalize_inventor_name(name: str) -> str:
         return name.strip()
     last, first = parts
     return f"{first} {last}"
-
-
-_QUERY_OPERATOR_WORDS = {"AND", "OR", "NOT"}
-_QUERY_SYNTAX_CHARS = re.compile(r'([+\-!(){}\[\]^"~:\\/&|])')
-
-
-def _name_clause(field: str, name: str) -> str:
-    """Build an ODP q clause matching a person or organization name.
-
-    A multi-word name is normally sent as a quoted exact phrase. But ODP
-    ignores "*" and "?" inside a quoted phrase (live-verified 2026-10-14:
-    "Cincinnati Children*" -> 0 matches), so a multi-word name with a
-    wildcard is instead sent as each word ANDed together:
-    field:(Cincinnati AND Children*) -> 44 matches. Words then need not
-    be adjacent or in order.
-
-    In that form, words ODP would read as operators (AND/OR/NOT) are
-    lowercased, query-syntax characters are escaped, and words with no
-    letters or digits (e.g. "&") are dropped.
-    """
-    if " " not in name:
-        return f"{field}:{name}"
-    if "*" not in name and "?" not in name:
-        return f'{field}:"{name}"'
-    terms = []
-    for word in name.split():
-        if not any(ch.isalnum() for ch in word):
-            continue
-        if word.upper() in _QUERY_OPERATOR_WORDS:
-            word = word.lower()
-        terms.append(_QUERY_SYNTAX_CHARS.sub(r"\\\1", word))
-    return f"{field}:({' AND '.join(terms)})"
 
 
 def _normalize_cpc_classification(cpc: str) -> str:
@@ -1652,12 +1621,12 @@ async def odp_search_applications(
     if query:
         q_parts.append(query)
     if inventor_name:
-        q_parts.append(_name_clause(
+        q_parts.append(name_clause(
             "applicationMetaData.inventorBag.inventorNameText",
             _normalize_inventor_name(inventor_name),
         ))
     if assignee_name:
-        q_parts.append(_name_clause(
+        q_parts.append(name_clause(
             "applicationMetaData.firstApplicantName", assignee_name
         ))
     if q_parts:
