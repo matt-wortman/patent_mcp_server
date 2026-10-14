@@ -59,3 +59,13 @@ def test_from_odp_finds_petition_decision_bag():
     assert result["count"] == 2
     assert result["total"] == 10
     assert result["results"] == [{"row": 0}, {"row": 1}]
+
+
+def test_from_odp_finds_office_action_bag():
+    # Live-verified 2026-10-14 on /api/v1/patent/office-action/search
+    result = ResponseEnvelope.from_odp(_bag_response("officeActionDataBag"))
+
+    assert result["success"] is True
+    assert result["count"] == 2
+    assert result["total"] == 10
+    assert result["results"] == [{"row": 0}, {"row": 1}]

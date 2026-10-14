@@ -1,4 +1,13 @@
 {
+  "Office Actions API": {
+    "url": "https://data.uspto.gov/swagger/office-actions.yaml",
+    "paths": [
+      "/api/v1/patent/office-action/search",
+      "/api/v1/patent/office-action/search/download",
+      "/api/v1/patent/office-action/{officeActionRecordIdentifier}",
+      "/api/v1/patent/office-action/{officeActionRecordIdentifier}/download/officeActionText"
+    ]
+  },
   "Open Data Portal API": {
     "url": "https://data.uspto.gov/swagger/swagger.yaml",
     "paths": [
@@ -37,7 +46,12 @@
       "/api/v1/patent/trials/proceedings/search/download",
       "/api/v1/patent/trials/proceedings/{trialNumber}",
       "/api/v1/patent/trials/{trialNumber}/decisions",
-      "/api/v1/patent/trials/{trialNumber}/documents",
+      "/api/v1/patent/trials/{trialNumber}/documents"
+    ]
+  },
+  "Petition Decisions API": {
+    "url": "https://data.uspto.gov/swagger/petition-decisions.yaml",
+    "paths": [
       "/api/v1/petition/decisions/search",
       "/api/v1/petition/decisions/search/download",
       "/api/v1/petition/decisions/{petitionDecisionRecordIdentifier}"

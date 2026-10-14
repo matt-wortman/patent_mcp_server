@@ -159,6 +159,43 @@ async def test_odp_get_petition_decision_rejects_blank_record_id():
     assert_validation_error(result)
 
 
+async def test_odp_search_petition_decisions_rejects_bad_sort_order():
+    result = await patents.odp_search_petition_decisions(sort_order="newest")
+    assert_validation_error(result)
+
+
+# --- Office actions ----------------------------------------------------
+
+async def test_odp_search_office_actions_rejects_digitless_app_number():
+    result = await patents.odp_search_office_actions(app_num="abc")
+    assert_validation_error(result)
+
+
+async def test_odp_search_office_actions_rejects_digitless_patent_number():
+    result = await patents.odp_search_office_actions(patent_number="none")
+    assert_validation_error(result)
+
+
+async def test_odp_search_office_actions_rejects_bad_sort_order():
+    result = await patents.odp_search_office_actions(sort_order="sideways")
+    assert_validation_error(result)
+
+
+async def test_odp_search_office_actions_rejects_oversized_limit():
+    result = await patents.odp_search_office_actions(limit=501)
+    assert_validation_error(result)
+
+
+@pytest.mark.parametrize("tool_name", [
+    "odp_get_office_action",
+    "odp_get_office_action_text",
+])
+@pytest.mark.parametrize("bad_id", ["   ", "../../applications/14643719", "a b"])
+async def test_office_action_record_tools_reject_unsafe_ids(tool_name, bad_id):
+    result = await getattr(patents, tool_name)(bad_id)
+    assert_validation_error(result)
+
+
 async def test_odp_download_dataset_file_rejects_foreign_url():
     result = await patents.odp_download_dataset_file(
         "https://evil.example.com/api/v1/datasets/products/files/x/y.xml"

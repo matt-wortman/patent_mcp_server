@@ -10,7 +10,7 @@ Special thanks to [Parker Hancock](https://github.com/parkerhancock), author of 
 
 ## Features
 
-This server provides **44 tools** across 4 USPTO data sources for:
+This server provides **47 tools** across 4 USPTO data sources for:
 
 1. **Patent Search** - Full-text search of granted patents and published applications via PPUBS
 2. **Full Text Documents** - Get complete text of patents including claims, description, and specification
@@ -208,8 +208,11 @@ marked complete.
 | `odp_search_datasets` | Search bulk data products |
 | `odp_get_dataset` | Get dataset product details |
 | `odp_download_dataset_file` | Download a bulk dataset file to disk |
-| `odp_search_petition_decisions` | Search final petition decisions |
+| `odp_search_petition_decisions` | Search petition decisions by outcome, date, or letter text |
 | `odp_get_petition_decision` | Get one petition decision by record id |
+| `odp_search_office_actions` | Search office actions (2007 to present) by rejection type, art unit, document type, date, or text |
+| `odp_get_office_action` | Get one office action by record id (text cut to 500 characters) |
+| `odp_get_office_action_text` | Get the complete text of one office action |
 
 ### PTAB API v3 (Patent Trial and Appeal Board)
 | Tool | Description |
@@ -228,7 +231,7 @@ marked complete.
 ### DSAPI (Data Set API) — Office Actions, Citations & Litigation
 | Tool | Description |
 |------|-------------|
-| `dsapi_search_office_actions` | Full-text office actions for an application |
+| `dsapi_search_office_actions` | Full-text office actions for an application (data through early 2020) |
 | `dsapi_search_rejections` | OA rejections with §101/102/103/112 flags and SME indicators |
 | `dsapi_search_oa_citations` | References cited in office action paragraphs |
 | `dsapi_search_enriched_citations` | Enriched citation metadata for an application |
@@ -288,7 +291,13 @@ uv sync --dev
 
 ## Version History
 
-### v0.14.0 (Current)
+### v0.15.0 (Current)
+- New ODP Office Actions tools for USPTO's October 2026 Office Actions API: `odp_search_office_actions`, `odp_get_office_action`, `odp_get_office_action_text`. They cover about 20 million office actions mailed from 2007 to the present, updated continuously, and search by application or patent number, document type, rejection type (101/102/103/112/double patenting), art unit, mail date, or words in the letter. The older `dsapi_search_office_actions` dataset stops in early 2020. Search and single-record results cut the letter text to 500 characters, so `odp_get_office_action_text` fetches the full letter
+- `odp_search_petition_decisions` now filters by outcome (`decision`), decision date range, and sort order, using USPTO's POST search. Fixed its docstring example, which named a field that does not exist (`decisionTypeCodeDescriptionText`; the real field is `decidedPetitionTypeCodeDescriptionText`)
+- USPTO moved petition decisions into their own API definition with unchanged paths; the drift baseline is refreshed to match
+- ODP rejects a date range with only one end, so a one-sided range is sent as a `field:>=date` or `field:<=date` query clause. Record ids passed to the new tools are restricted to letters, digits, and hyphens
+
+### v0.14.0
 - Best-complete-record retrieval. `odp_download_document` defaults to `preferred_format="AUTO"`: it keeps one primary representation (XML, then MS Word, then PDF) plus every unique advertised image or other media asset. USPTO XML archives retain safe relative paths and all safe members, identical binaries are deduplicated by SHA-256, arbitrary offered media formats are preserved without conversion, and any missing or over-limit asset is reported as `INCOMPLETE_DOCUMENT_RECORD` instead of silently returning a partial record. Downloads are streamed through per-file, per-record, and option-count safety bounds. The response includes `record_files`, `asset_file_paths`, hashes, format-selection details, and a completeness flag
 - `odp_get_documents` now lists each file-wrapper document's available download formats so the caller can see when a native format exists
 - Server instructions, prompts, and resources now tell the client to prefer structured JSON/XML and Word text, use `ppubs_get_full_document` / `ppubs_get_patent_by_number` for patent text, and reserve PDF/OCR for PDF-only records or when layout and images matter

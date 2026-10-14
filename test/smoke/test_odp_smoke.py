@@ -35,6 +35,9 @@ from patent_mcp_server.patents import (
     odp_search_petition_decisions,
     odp_get_petition_decision,
     odp_download_dataset_file,
+    odp_search_office_actions,
+    odp_get_office_action,
+    odp_get_office_action_text,
 )
 
 pytestmark = [pytest.mark.smoke, pytest.mark.asyncio(loop_scope="session")]
@@ -396,3 +399,88 @@ async def test_odp_download_dataset_file_saves_grant_xml(tmp_path, monkeypatch):
     saved = Path(result["file_path"])
     assert saved.exists() and saved.stat().st_size > 1000
     assert saved.read_bytes()[:5] == b"<?xml"
+
+
+async def test_odp_search_petition_decisions_outcome_and_date_filters():
+    """Outcome filter, two-sided date range, and ascending sort all apply."""
+    result = await odp_search_petition_decisions(
+        decision="DENIED,DISMISSED",
+        decision_date_from="2026-01-01",
+        decision_date_to="2026-06-30",
+        sort_order="asc",
+        limit=5,
+    )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    rows = _load_oversized_response(result)["results"]
+    assert rows, "Expected denied/dismissed decisions in the first half of 2026"
+    dates = [row["decisionDate"] for row in rows]
+    assert dates == sorted(dates), f"Expected ascending dates, got: {dates}"
+    for row in rows:
+        assert row["decidedPetitionTypeCodeDescriptionText"] in {"DENIED", "DISMISSED"}
+        assert "2026-01-01" <= row["decisionDate"] <= "2026-06-30"
+
+
+# --- Office actions (v0.15.0) --------------------------------------------
+
+OA_APP_NUM = APP_NUM  # 14643719: one non-final rejection (2017), one allowance (2018)
+
+
+async def test_odp_search_office_actions_by_app_num():
+    """Searching by application number returns that application's letters."""
+    result = await odp_search_office_actions(app_num=OA_APP_NUM)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    rows = result.get("results", [])
+    assert {row["documentCode"] for row in rows} >= {"CTNF", "NOA"}, f"Got: {rows}"
+    assert all(row["applicationNumberText"] == OA_APP_NUM for row in rows)
+
+
+async def test_odp_search_office_actions_filters_and_one_sided_date():
+    """Document type, rejection type, and a one-sided date range all apply."""
+    result = await odp_search_office_actions(
+        document_code="CTNF",
+        rejection_type="101",
+        submission_date_from="2026-01-01",
+        limit=5,
+    )
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    rows = result.get("results", [])
+    assert rows, "Expected 101 non-final rejections mailed in 2026"
+    dates = [row["submissionDate"] for row in rows]
+    assert dates == sorted(dates, reverse=True), f"Expected newest first: {dates}"
+    for row in rows:
+        assert row["documentCode"] == "CTNF"
+        assert "101" in row.get("rejectionTypeBag", [])
+        assert row["submissionDate"] >= "2026-01-01"
+
+
+async def _allowance_record_id():
+    search = await odp_search_office_actions(app_num=OA_APP_NUM, document_code="NOA")
+    assert search.get("success") is True, f"Got: {search}"
+    return search["results"][0]["officeActionRecordIdentifier"]
+
+
+async def test_odp_get_office_action_roundtrip():
+    """odp_get_office_action fetches a record found via search."""
+    record_id = await _allowance_record_id()
+
+    result = await odp_get_office_action(record_id)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    row = result["results"][0]
+    assert row["officeActionRecordIdentifier"] == record_id
+    assert row["applicationNumberText"] == OA_APP_NUM
+
+
+async def test_odp_get_office_action_text_returns_full_letter():
+    """The text tool returns the whole letter, past the 500-character cut."""
+    record_id = await _allowance_record_id()
+
+    result = await odp_get_office_action_text(record_id)
+
+    assert result.get("success") is True, f"Expected success, got: {result}"
+    text = _load_oversized_response(result)["results"]["officeActionText"]
+    assert len(text) > 1000, f"Expected the full letter, got {len(text)} chars"
+    assert "EXAMINER'S AMENDMENT" in text

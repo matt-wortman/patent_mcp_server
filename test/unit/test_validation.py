@@ -5,6 +5,7 @@ from patent_mcp_server.util.validation import (
     validate_patent_number,
     validate_app_number,
     validate_pagination,
+    validate_record_id,
     validate_status_code,
 )
 
@@ -352,3 +353,25 @@ def test_validate_status_code_rejects_non_digits():
         validate_status_code("")
     with pytest.raises(ValueError, match="[Ss]tatus code"):
         validate_status_code(None)
+
+
+# ============================================================================
+# Record Identifier Validation Tests
+# ============================================================================
+
+@pytest.mark.unit
+def test_validate_record_id_accepts_live_id_shapes():
+    """Office-action hex ids and petition UUIDs pass, whitespace stripped."""
+    assert validate_record_id("0ab9138726dc443f6ede150bb00ce1f7") == (
+        "0ab9138726dc443f6ede150bb00ce1f7"
+    )
+    assert validate_record_id(" 69d572ca-b59f-5b29-86ae-168b4092195b ") == (
+        "69d572ca-b59f-5b29-86ae-168b4092195b"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad", ["", "   ", "../x", "a/b", "a?b=1", "x" * 65, None])
+def test_validate_record_id_rejects_unsafe_input(bad):
+    with pytest.raises(ValueError, match="record_id"):
+        validate_record_id(bad)

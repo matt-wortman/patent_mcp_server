@@ -6,6 +6,38 @@ formatted input (US prefixes, commas, slashes, spaces), strip everything
 but digits, and raise ValueError with a clear message on bad input.
 """
 
+import re
+
+# ODP record identifiers are UUIDs (petition decisions) or 32-char hex
+# strings (office actions). Restricting the alphabet keeps a caller-supplied
+# id from adding path segments to the request URL.
+_RECORD_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def validate_record_id(record_id: str) -> str:
+    """
+    Validate an ODP record identifier.
+
+    Args:
+        record_id: Raw identifier (surrounding whitespace is stripped)
+
+    Returns:
+        The stripped identifier
+
+    Raises:
+        ValueError: If the identifier is empty or contains anything other
+            than letters, digits, and hyphens
+    """
+    if not isinstance(record_id, str) or not record_id.strip():
+        raise ValueError("record_id is required")
+    cleaned = record_id.strip()
+    if not _RECORD_ID_RE.match(cleaned):
+        raise ValueError(
+            "Invalid record_id: use only letters, digits, and hyphens "
+            "(max 64 characters)"
+        )
+    return cleaned
+
 
 def validate_patent_number(patent_number: str) -> str:
     """

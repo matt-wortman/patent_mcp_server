@@ -37,6 +37,7 @@ from patent_mcp_server.util.validation import (
     validate_patent_number,
     validate_app_number,
     validate_pagination,
+    validate_record_id,
     validate_status_code,
 )
 from patent_mcp_server.util.response import (
@@ -454,6 +455,53 @@ def _normalize_cpc_classification(cpc: str) -> str:
     if not cpc or not isinstance(cpc, str):
         return cpc
     return re.sub(r"\s+", "", cpc.strip().upper())
+
+
+def _split_values(value: Optional[Union[str, int]]) -> list:
+    """Split a comma-separated filter value into a list of trimmed strings.
+
+    ODP filters treat a multi-value list as OR, so "102,103" matches either.
+    """
+    if value is None:
+        return []
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _apply_date_range(
+    body: Dict[str, Any],
+    field: str,
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> None:
+    """Add a date range on `field` to an ODP POST search body, in place.
+
+    ODP rejects a rangeFilters entry that has only one bound (400 Bad
+    Request), so a one-sided range becomes a `field:>=date` or
+    `field:<=date` clause in the q string instead. Any existing q is
+    parenthesized so an OR inside it cannot swallow the date clause.
+    """
+    if date_from and date_to:
+        body.setdefault("rangeFilters", []).append({
+            "field": field,
+            "valueFrom": date_from,
+            "valueTo": date_to,
+        })
+        return
+    if date_from:
+        clause = f"{field}:>={date_from}"
+    elif date_to:
+        clause = f"{field}:<={date_to}"
+    else:
+        return
+    body["q"] = f"({body['q']}) AND {clause}" if body.get("q") else clause
+
+
+def _sort_clause(field: str, sort_order: str) -> list:
+    """Build an ODP sort list for `field`; sort_order must be asc or desc."""
+    order = (sort_order or "").strip().lower()
+    if order not in ("asc", "desc"):
+        raise ValueError("sort_order must be 'asc' or 'desc'")
+    return [{"field": field, "order": order}]
 
 
 async def _search_patent_by_number(patent_number: str) -> Dict[str, Any]:
@@ -1708,26 +1756,42 @@ async def odp_download_dataset_file(file_url: str) -> Dict[str, Any]:
 async def odp_search_petition_decisions(
     query: Optional[str] = None,
     app_num: Optional[str] = None,
+    decision: Optional[str] = None,
+    decision_date_from: Optional[str] = None,
+    decision_date_to: Optional[str] = None,
+    sort_order: str = "desc",
     offset: int = 0,
     limit: int = 25,
 ) -> Dict[str, Any]:
-    """Search USPTO final petition decisions.
+    """Search USPTO petition decisions (applications filed since 2001).
 
     USE THIS TOOL WHEN: You need decisions on petitions filed during
     prosecution — petitions to revive, to invoke supervisory authority,
-    to make special, etc. Each record includes the petition type, decision
-    type, deciding office, dates, and the application it belongs to.
+    to make special, to accept late maintenance fees, etc. Each record
+    includes the petition type, outcome, deciding office, dates, the
+    application it belongs to, cited rules and statutes, and the OCR text
+    of the decision letter (ocrSearchText).
 
     Args:
-        query: Free-form query or ODP DSL field:value syntax (e.g.,
-            "decisionTypeCodeDescriptionText:GRANTED")
+        query: Free-form query (searches the decision letter text too) or
+            ODP DSL field:value syntax (e.g.,
+            "finalDecidingOfficeName:\"OFFICE OF PETITIONS\"")
         app_num: Filter by application number (builds an
             applicationNumberText:<value> clause)
+        decision: Filter by outcome. Values: "GRANTED", "DISMISSED",
+            "DENIED", "GRANTED-IN-PART". Comma-separate to match any of
+            several (e.g., "DENIED,DISMISSED"). Builds a filter on
+            decidedPetitionTypeCodeDescriptionText.
+        decision_date_from: Decision date range start (YYYY-MM-DD)
+        decision_date_to: Decision date range end (YYYY-MM-DD)
+        sort_order: Sort by decision date, "desc" (newest first, default)
+            or "asc"
         offset: Starting position (default: 0)
         limit: Max results (default: 25, max: 100)
     """
     try:
         validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+        sort = _sort_clause("decisionDate", sort_order)
     except ValueError as e:
         return ApiError.validation_error(str(e))
 
@@ -1737,18 +1801,29 @@ async def odp_search_petition_decisions(
         except ValueError as e:
             return ApiError.validation_error(str(e), "app_num")
 
-    params: Dict[str, Any] = {"offset": offset, "limit": limit}
+    body: Dict[str, Any] = {
+        "pagination": {"offset": offset, "limit": limit},
+        "sort": sort,
+    }
     q_parts = []
     if query:
         q_parts.append(query)
     if app_num:
         q_parts.append(f"applicationNumberText:{app_num}")
     if q_parts:
-        params["q"] = " AND ".join(q_parts)
+        body["q"] = " AND ".join(q_parts)
 
-    query_string = api_client.build_query_string(params)
-    url = f"{config.API_BASE_URL}/api/v1/petition/decisions/search?{query_string}"
-    result = await api_client.make_request(url)
+    decisions = [d.upper() for d in _split_values(decision)]
+    if decisions:
+        body["filters"] = [{
+            "name": "decidedPetitionTypeCodeDescriptionText",
+            "value": decisions,
+        }]
+
+    _apply_date_range(body, "decisionDate", decision_date_from, decision_date_to)
+
+    url = f"{config.API_BASE_URL}/api/v1/petition/decisions/search"
+    result = await api_client.make_request(url, method="POST", data=body)
 
     if is_error(result):
         return result
@@ -1775,6 +1850,189 @@ async def odp_get_petition_decision(record_id: str) -> Dict[str, Any]:
         return result
 
     return check_and_truncate(ResponseEnvelope.from_odp(result))
+
+
+# =====================================================================
+# ODP Office Actions - examiner letters, 2007 to present
+# =====================================================================
+
+@mcp.tool()
+async def odp_search_office_actions(
+    query: Optional[str] = None,
+    app_num: Optional[str] = None,
+    patent_number: Optional[str] = None,
+    document_code: Optional[str] = None,
+    rejection_type: Optional[str] = None,
+    group_art_unit: Optional[Union[str, int]] = None,
+    submission_date_from: Optional[str] = None,
+    submission_date_to: Optional[str] = None,
+    sort_order: str = "desc",
+    offset: int = 0,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Search USPTO office actions (examiner letters) in the Open Data Portal.
+
+    USE THIS TOOL WHEN: You need office actions from 2020 onward, or need
+    to search office actions by anything other than application number —
+    rejection type, art unit, document type, date range, or words in the
+    letter. Covers ~20M office actions mailed 2007 to present, updated
+    continuously. (dsapi_search_office_actions covers only data through
+    early 2020 and searches by application number only.)
+
+    Each record has documentCode, submissionDate, applicationNumberText,
+    patentNumber, groupArtUnitNumber, inventionTitle, rejectionTypeBag, and
+    officeActionRecordIdentifier. officeActionText is CUT TO 500
+    CHARACTERS here; pass the record identifier to
+    odp_get_office_action_text for the complete letter.
+
+    Args:
+        query: Free-text or Lucene query across all fields, including the
+            letter text (e.g., "obviousness AND Alice", or
+            "documentCode:CTNF AND groupArtUnitNumber:1631")
+        app_num: Filter by application number (exact match)
+        patent_number: Filter by patent number (exact match)
+        document_code: Filter by document type code. Common values:
+            "CTNF" (non-final rejection), "CTFR" (final rejection),
+            "NOA" (notice of allowance), "CTRS" (restriction requirement),
+            "CTAV" (advisory action), "CTEQ" (Ex parte Quayle action).
+            Comma-separate to match any of several (e.g., "CTNF,CTFR").
+        rejection_type: Filter by rejection cited in the letter. Values:
+            "101", "102", "103", "112", "DoublePatent", "Other".
+            Comma-separate to match any of several (e.g., "102,103").
+        group_art_unit: Filter by group art unit number (e.g., "1631")
+        submission_date_from: Mail date range start (YYYY-MM-DD)
+        submission_date_to: Mail date range end (YYYY-MM-DD)
+        sort_order: Sort by mail date, "desc" (newest first, default)
+            or "asc"
+        offset: Starting position (default: 0)
+        limit: Max results (default: 25, max: 100)
+
+    Returns:
+        Normalized response with matching office actions.
+    """
+    try:
+        validate_pagination(offset, limit, max_limit=MAX_PAGE_LIMIT)
+        sort = _sort_clause("submissionDate", sort_order)
+    except ValueError as e:
+        return ApiError.validation_error(str(e))
+
+    body: Dict[str, Any] = {
+        "pagination": {"offset": offset, "limit": limit},
+        "sort": sort,
+    }
+    if query:
+        body["q"] = query
+
+    filters = []
+    if app_num:
+        try:
+            filters.append({
+                "name": "applicationNumberText",
+                "value": [validate_app_number(str(app_num))],
+            })
+        except ValueError as e:
+            return ApiError.validation_error(str(e), "app_num")
+    if patent_number:
+        try:
+            filters.append({
+                "name": "patentNumber",
+                "value": [validate_patent_number(str(patent_number))],
+            })
+        except ValueError as e:
+            return ApiError.validation_error(str(e), "patent_number")
+    for name, value in (
+        ("documentCode", document_code),
+        ("rejectionTypeBag", rejection_type),
+        ("groupArtUnitNumber", group_art_unit),
+    ):
+        values = _split_values(value)
+        if values:
+            filters.append({"name": name, "value": values})
+    if filters:
+        body["filters"] = filters
+
+    _apply_date_range(
+        body, "submissionDate", submission_date_from, submission_date_to
+    )
+
+    url = f"{config.API_BASE_URL}/api/v1/patent/office-action/search"
+    result = await api_client.make_request(url, method="POST", data=body)
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_odp(result, offset, limit))
+
+
+@mcp.tool()
+async def odp_get_office_action(record_id: str) -> Dict[str, Any]:
+    """Get one office action's details by its record identifier.
+
+    Returns the same fields as odp_search_office_actions, with
+    officeActionText cut to 500 characters. For the complete letter use
+    odp_get_office_action_text.
+
+    Args:
+        record_id: officeActionRecordIdentifier from
+            odp_search_office_actions (a 32-character hex string)
+    """
+    try:
+        record_id = validate_record_id(record_id)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "record_id")
+
+    url = f"{config.API_BASE_URL}/api/v1/patent/office-action/{record_id}"
+    result = await api_client.make_request(url)
+
+    if is_error(result):
+        return result
+
+    return check_and_truncate(ResponseEnvelope.from_odp(result))
+
+
+@mcp.tool()
+async def odp_get_office_action_text(record_id: str) -> Dict[str, Any]:
+    """Get the complete text of one office action.
+
+    USE THIS TOOL WHEN: You need the examiner's full reasoning — the
+    rejections, cited references, and claim-by-claim analysis. Search
+    results and odp_get_office_action stop at 500 characters.
+
+    Long letters exceed the response budget; the full text is then saved
+    to disk and the response gives its file_path.
+
+    Args:
+        record_id: officeActionRecordIdentifier from
+            odp_search_office_actions (a 32-character hex string)
+
+    Returns:
+        Response whose results hold officeActionRecordIdentifier and
+        officeActionText (the full letter as plain text).
+    """
+    try:
+        record_id = validate_record_id(record_id)
+    except ValueError as e:
+        return ApiError.validation_error(str(e), "record_id")
+
+    url = (
+        f"{config.API_BASE_URL}/api/v1/patent/office-action/"
+        f"{record_id}/download/officeActionText"
+    )
+    result = await api_client.download_file(url)
+
+    if is_error(result):
+        return result
+
+    text = result["content"].decode("utf-8", errors="replace")
+    return check_and_truncate(ResponseEnvelope.success(
+        results={
+            "officeActionRecordIdentifier": record_id,
+            "officeActionText": text,
+        },
+        source="odp",
+        count=1,
+        total=1,
+    ))
 
 
 # =====================================================================
@@ -2367,7 +2625,10 @@ async def dsapi_search_office_actions(
 
     USE THIS TOOL WHEN: You need the actual text content of office actions,
     including section-level rejection text (101, 102, 103, 112), claim
-    analysis, citation details, and examiner reasoning.
+    analysis, citation details, and examiner reasoning, for letters mailed
+    before 2020-03. For anything newer, or to search by rejection type,
+    art unit, or date, use odp_search_office_actions and
+    odp_get_office_action_text instead.
 
     CAUTION: Records are large (full text). Default limit is 5 to avoid
     oversized responses. Increase rows only if needed.

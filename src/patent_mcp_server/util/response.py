@@ -136,6 +136,9 @@ class ResponseEnvelope:
         elif "petitionDecisionDataBag" in raw_response:
             results = raw_response.get("petitionDecisionDataBag", [])
             total = raw_response.get("count", len(results))
+        elif "officeActionDataBag" in raw_response:
+            results = raw_response.get("officeActionDataBag", [])
+            total = raw_response.get("count", len(results))
         elif "results" in raw_response:
             results = raw_response.get("results", [])
             total = raw_response.get("count", len(results))
