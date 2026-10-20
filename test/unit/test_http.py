@@ -112,3 +112,66 @@ async def test_streamed_error_reader_returns_only_bounded_prefix():
     prefix = await reader(response, max_bytes=10)
 
     assert prefix == b"x" * 10
+
+
+# ----------------------------------------------------------------------
+# Timeouts that survive every retry come back as an error, not a crash
+# ----------------------------------------------------------------------
+
+def _always_failing(monkeypatch, exc_type):
+    """A coroutine that always raises exc_type, wrapped with no retry waits."""
+    from tenacity import wait_none
+
+    calls = []
+
+    async def attempt(*, context="Request failed"):
+        calls.append(context)
+        raise exc_type("boom")
+
+    wrapped = http_utils.retry_then_error(attempt)
+    monkeypatch.setattr(wrapped.retry, "wait", wait_none())
+    return wrapped, calls
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_timeout_after_retries_returns_error(monkeypatch):
+    """The retry policy re-raises the last timeout, so without a boundary
+    it escaped from every tool except the document download."""
+    from patent_mcp_server.config import config
+
+    wrapped, calls = _always_failing(monkeypatch, httpx.ReadTimeout)
+
+    result = await wrapped(context="Search failed")
+
+    assert result["error"] is True
+    assert result["error_code"] == "TIMEOUT"
+    assert result["status_code"] == 504
+    assert "limit" in result["message"]
+    assert result["message"].startswith("Search failed")
+    assert len(calls) == config.MAX_RETRIES
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_network_error_after_retries_returns_error(monkeypatch):
+    wrapped, _ = _always_failing(monkeypatch, httpx.ConnectError)
+
+    result = await wrapped()
+
+    assert result["error"] is True
+    assert result["error_code"] == "NETWORK_ERROR"
+    assert result["status_code"] == 503
+
+
+@pytest.mark.unit
+def test_every_retry_point_returns_errors():
+    """Each place that retries network failures must end in an error dict."""
+    from patent_mcp_server.uspto.ppubs_uspto_gov import PpubsClient
+
+    for retrying in (
+        http_utils._send_with_retry,
+        http_utils.request_bytes,
+        PpubsClient.make_request,
+    ):
+        assert getattr(retrying, "returns_error_after_retries", False), retrying

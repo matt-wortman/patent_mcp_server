@@ -8,9 +8,10 @@ and 4 requests/minute for PDF/ZIP downloads.
 """
 
 import asyncio
+import functools
 import json
 import logging
-from typing import Any, Dict, Optional, Set, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -55,6 +56,49 @@ uspto_retry = retry(
     retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
     reraise=True,
 )
+
+
+def network_failure_error(exc: Exception, context: str) -> Dict[str, Any]:
+    """Error dict for a timeout or connection failure that outlasted every retry."""
+    attempts = f"{config.MAX_RETRIES} attempts"
+    if isinstance(exc, httpx.TimeoutException):
+        return ApiError.create(
+            message=(
+                f"{context}: USPTO did not answer within {config.REQUEST_TIMEOUT:g} "
+                f"seconds ({attempts}). Large requests are slow; ask for fewer rows "
+                "(a smaller limit) or try again shortly."
+            ),
+            status_code=504,
+            error_code="TIMEOUT",
+        )
+    return ApiError.create(
+        message=f"{context}: could not reach USPTO ({attempts}): {exc}",
+        status_code=503,
+        error_code="NETWORK_ERROR",
+    )
+
+
+def retry_then_error(
+    func: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Apply uspto_retry, then return an error dict once the retries run out.
+
+    uspto_retry re-raises the last timeout or network error so that tenacity
+    can retry it; without this boundary that exception escaped through the
+    tools. The wrapper keeps tenacity's ``retry`` attribute.
+    """
+    retrying = uspto_retry(func)
+
+    @functools.wraps(retrying)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await retrying(*args, **kwargs)
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            logger.error(f"Network error after {config.MAX_RETRIES} attempts: {exc}")
+            return network_failure_error(exc, kwargs.get("context", "Request failed"))
+
+    wrapper.returns_error_after_retries = True  # type: ignore[attr-defined]
+    return wrapper
 
 
 def make_logged_client(headers: Dict[str, str]) -> httpx.AsyncClient:
@@ -227,7 +271,7 @@ async def _send(
         return ApiError.from_exception(e, context)
 
 
-_send_with_retry = uspto_retry(_send)
+_send_with_retry = retry_then_error(_send)
 
 
 async def request_json(
@@ -272,7 +316,7 @@ async def request_json(
     return {"results": parsed}
 
 
-@uspto_retry
+@retry_then_error
 async def request_bytes(
     client: httpx.AsyncClient,
     url: str,

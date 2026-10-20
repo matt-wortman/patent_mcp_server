@@ -13,7 +13,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from patent_mcp_server.config import config
 
@@ -260,16 +260,13 @@ def estimate_tokens(data: Any) -> int:
         return len(str(data)) // 4
 
 
-def _save_oversized_to_disk(
-    response: Dict[str, Any],
-    source: str,
-) -> Dict[str, Any]:
-    """Serialize an oversized response to disk and return a summary envelope.
+def _write_oversized_file(response: Dict[str, Any], source: str) -> Tuple[str, int]:
+    """Write the full response as JSON to the download folder.
 
-    Writes the full response as JSON to
-    ``{config.DOWNLOAD_DIR}/oversized_{source}_{timestamp}.json`` and returns
-    a small summary that replaces the `results` payload so the caller stays
-    under the token budget.
+    The file is ``{config.DOWNLOAD_DIR}/oversized_{source}_{timestamp}.json``.
+
+    Returns:
+        The file path and its size in bytes
     """
     download_dir = config.DOWNLOAD_DIR
     os.makedirs(download_dir, exist_ok=True)
@@ -287,7 +284,20 @@ def _save_oversized_to_disk(
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(serialized)
 
-    size_bytes = len(serialized.encode("utf-8"))
+    return file_path, len(serialized.encode("utf-8"))
+
+
+def _save_oversized_to_disk(
+    response: Dict[str, Any],
+    source: str,
+) -> Dict[str, Any]:
+    """Serialize an oversized response to disk and return a summary envelope.
+
+    Writes the full response with ``_write_oversized_file`` and returns a
+    small summary that replaces the `results` payload so the caller stays
+    under the token budget.
+    """
+    file_path, size_bytes = _write_oversized_file(response, source)
     est = estimate_tokens(response)
 
     results = response.get("results")
@@ -340,7 +350,8 @@ def truncate_response(
     """Truncate a response if it exceeds token budget.
 
     Handles three cases:
-    1. List-shaped `results` over max_results → slice to max_results.
+    1. List-shaped `results` over max_results → keep the first max_results
+       inline and save the full payload to disk, naming the file.
     2. Dict-shaped `results` (single record) still over budget → save full
        payload to disk, replace `results` with a summary envelope.
     3. List still oversized after slicing (each item is huge) → save full
@@ -372,11 +383,6 @@ def truncate_response(
             truncated["_truncated"] = True
             truncated["_original_count"] = original_count
             truncated["_truncated_to"] = max_results
-            truncated["_truncation_message"] = (
-                f"Response truncated from {original_count} to {max_results} results "
-                f"to fit within token budget. Use 'offset' parameter to paginate "
-                f"through remaining results."
-            )
             truncated["count"] = max_results
             logger.info(
                 f"Truncated response from {original_count} to {max_results} results "
@@ -389,6 +395,18 @@ def truncate_response(
             if estimate_tokens(truncated) > max_tokens:
                 return _save_oversized_to_disk(response, source)
 
+            # The preview stays inline, but every row also goes to disk: the
+            # envelope's offset, limit and has_more still describe the whole
+            # page, so rows cut here are otherwise skipped by the next page.
+            file_path, _ = _write_oversized_file(response, source)
+            next_offset = (response.get("offset") or 0) + original_count
+            truncated["_oversized_file"] = file_path
+            truncated["_truncation_message"] = (
+                f"Showing the first {max_results} of {original_count} results to fit "
+                f"the token budget. All {original_count} results are saved in full at "
+                f"{file_path}; read that file for the rest. The next page starts at "
+                f"offset {next_offset}."
+            )
             return truncated
 
         # List is short but still oversized — items themselves are huge.

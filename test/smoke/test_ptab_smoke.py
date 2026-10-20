@@ -165,3 +165,28 @@ async def test_ptab_party_name_with_query_syntax_character_still_searches():
     result = await ptab_search_proceedings(party_name="Raytheon:", limit=1)
     assert result.get("error") is not True, result
     assert result["success"] is True
+
+
+async def test_cut_list_reply_saves_every_row(monkeypatch, tmp_path):
+    """A 100-row page over the size budget keeps a preview and saves all 100.
+
+    Before the fix the reply kept its first 20 rows, saved nothing, and
+    still reported offset 0 and limit 100, so a caller paging on to offset
+    100 never saw rows 21 to 100. Live 2026-10-20: "Samsung" has 1,201
+    proceedings and a 100-row page is about 24,000 estimated tokens.
+    """
+    import json
+
+    from patent_mcp_server.config import config
+
+    monkeypatch.setattr(config, "DOWNLOAD_DIR", str(tmp_path))
+
+    result = await ptab_search_proceedings(query="Samsung", limit=100)
+
+    assert result.get("success") is True, result
+    assert result.get("_truncated") is True, "expected the page to be cut"
+    with open(result["_oversized_file"], encoding="utf-8") as f:
+        saved = json.load(f)
+    numbers = {row["trialNumber"] for row in saved["results"]}
+    assert len(numbers) == 100
+    assert "offset 100" in result["_truncation_message"]

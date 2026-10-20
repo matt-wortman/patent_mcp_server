@@ -17,7 +17,7 @@ from pathlib import Path
 
 from patent_mcp_server.util.errors import ApiError
 from patent_mcp_server.util.http import (
-    make_logged_client, rate_limit_delay, rate_limit_error, uspto_retry
+    make_logged_client, rate_limit_delay, rate_limit_error, retry_then_error
 )
 from patent_mcp_server.config import config
 from patent_mcp_server.constants import (
@@ -232,7 +232,7 @@ class PpubsClient:
         merged["headers"] = headers
         return merged
 
-    @uspto_retry
+    @retry_then_error
     async def make_request(self, method: str, url: str, **kwargs) -> Union[httpx.Response, Dict[str, Any]]:
         """Make a request with automatic retry for session expiration and network errors.
 

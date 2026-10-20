@@ -1513,11 +1513,7 @@ async def odp_download_document(
             attempt_errors.append({"format": format_name, "message": str(exc)})
             continue
 
-        try:
-            result = await api_client.download_file(url)
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            attempt_errors.append({"format": format_name, "message": str(exc)})
-            continue
+        result = await api_client.download_file(url)
         if is_error(result):
             attempt_errors.append(
                 {"format": format_name, "message": result.get("message", "download failed")}
@@ -1576,13 +1572,7 @@ async def odp_download_document(
                 )
                 continue
 
-            try:
-                asset_result = await api_client.download_file(asset_url)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
-                asset_errors.append(
-                    {"format": asset_format, "message": str(exc)}
-                )
-                continue
+            asset_result = await api_client.download_file(asset_url)
             if is_error(asset_result):
                 asset_errors.append(
                     {

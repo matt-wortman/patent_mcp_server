@@ -11,6 +11,7 @@ import pytest
 
 import patent_mcp_server.patents as patents
 from patent_mcp_server.uspto import document_download as downloads
+from patent_mcp_server.util.http import network_failure_error
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
@@ -762,12 +763,18 @@ async def test_explicit_word_preference_still_falls_back_if_needed(
 async def test_raised_network_error_falls_back_to_next_native_format(
     monkeypatch, tmp_path
 ):
-    """Regression: an exhausted XML timeout must not abort Word fallback."""
+    """Regression: an exhausted XML timeout must not abort Word fallback.
+
+    download_file now returns the timeout as an error dict once its
+    retries run out, so the fake returns exactly that dict.
+    """
     _install_listing(monkeypatch, _document_listing("XML", "MS_WORD", "PDF"))
 
     async def download(url):
         if url.endswith("/xmlarchive"):
-            raise httpx.ConnectTimeout("USPTO XML timeout")
+            return network_failure_error(
+                httpx.ConnectTimeout("USPTO XML timeout"), f"Download from {url} failed"
+            )
         content = _word_document()
         return {
             "content": content,

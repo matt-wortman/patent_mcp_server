@@ -77,8 +77,33 @@ def test_list_truncation_happy_path(tmp_download_dir):
     assert out["_original_count"] == 100
     assert out["_truncated_to"] == 5
     assert len(out["results"]) <= 5
-    # should NOT have been forced to disk save
+    # The preview rows stay inline; results are not replaced by a summary
     assert out.get("_oversized") is not True
+
+
+@pytest.mark.unit
+def test_list_truncation_saves_every_row_to_disk(tmp_download_dir):
+    """Rows cut from the inline preview must be saved, not dropped.
+
+    A 100-row page cut to its first rows kept has_more, offset and limit
+    describing the whole page, so a caller paging on to offset 100 never
+    saw the rows in between. The same bug was found live in the EPO server
+    (2026-10-20), which copied this code.
+    """
+    rows = [{"i": i, "title": f"record {i}"} for i in range(100)]
+    response = ResponseEnvelope.success(
+        results=rows, source="ppubs", total=536, offset=0, limit=100,
+    )
+
+    out = truncate_response(response, max_tokens=200, max_results=5)
+
+    assert out["results"] == rows[:5]
+    file_path = out["_oversized_file"]
+    with open(file_path, encoding="utf-8") as f:
+        saved = json.load(f)
+    assert saved["results"] == rows
+    assert file_path in out["_truncation_message"]
+    assert "offset 100" in out["_truncation_message"]
 
 
 # ----------------------------------------------------------------------
