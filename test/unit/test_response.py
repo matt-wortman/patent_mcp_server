@@ -438,3 +438,77 @@ def test_scalar_results_over_limit_still_moves_to_disk(tmp_download_dir):
     assert out["results"]["_shape"] == "str"
     with open(out["_oversized_file"], encoding="utf-8") as f:
         assert json.load(f)["results"] == "s" * 50_000
+
+
+# ----------------------------------------------------------------------
+# Claude Code: a list over the limit keeps as many rows as fit
+# ----------------------------------------------------------------------
+
+def _sent(reply):
+    return len(pydantic_core.to_json(reply, fallback=str, indent=2).decode())
+
+
+@pytest.mark.unit
+def test_claude_code_keeps_as_many_rows_as_fit(monkeypatch, tmp_download_dir):
+    """Over the limit, Claude Code gets the most rows that fit, not a fixed 20."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    monkeypatch.setattr(config, "CLAUDE_CODE_MAX_RESPONSE_CHARS", 20_000)
+    response = _hundred_row_page()
+    rows = response["results"]
+    assert _sent(response) > 20_000
+
+    out = check_and_truncate(response)
+
+    n = len(out["results"])
+    assert 20 < n < 100
+    assert out["results"] == rows[:n]
+    assert out["count"] == n
+    assert out["_truncated"] is True
+    assert out["_truncated_to"] == n
+    assert out["_original_count"] == 100
+    assert _sent(out) <= 20_000
+    # Maximal: one more row would not have fit.
+    one_more = dict(out, results=rows[: n + 1])
+    assert _sent(one_more) > 20_000
+    message = out["_truncation_message"]
+    assert f"first {n} of 100 results" in message
+    assert out["_oversized_file"] in message
+    assert "offset 100" in message
+    with open(out["_oversized_file"], encoding="utf-8") as f:
+        assert json.load(f)["results"] == rows
+
+
+@pytest.mark.unit
+def test_claude_code_short_list_of_huge_rows_keeps_what_fits(
+    monkeypatch, tmp_download_dir
+):
+    """Fewer than 20 huge rows still keep the ones that fit, with the rest on disk."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    monkeypatch.setattr(config, "CLAUDE_CODE_MAX_RESPONSE_CHARS", 20_000)
+    rows = [{"id": i, "blob": "y" * 8_000} for i in range(5)]
+    response = ResponseEnvelope.success(results=rows, source="ppubs", total=5, limit=5)
+
+    out = check_and_truncate(response)
+
+    assert out["results"] == rows[:2]
+    assert out["count"] == 2
+    assert "first 2 of 5 results" in out["_truncation_message"]
+    with open(out["_oversized_file"], encoding="utf-8") as f:
+        assert json.load(f)["results"] == rows
+
+
+@pytest.mark.unit
+def test_claude_code_single_row_too_big_goes_to_disk(monkeypatch, tmp_download_dir):
+    """When not even one row fits, the summary replaces the list, as before."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    monkeypatch.setattr(config, "CLAUDE_CODE_MAX_RESPONSE_CHARS", 20_000)
+    rows = [{"id": 0, "blob": "y" * 30_000}, {"id": 1, "blob": "y" * 30_000}]
+    response = ResponseEnvelope.success(results=rows, source="ppubs", total=2, limit=2)
+
+    out = check_and_truncate(response)
+
+    assert out["_oversized"] is True
+    assert out["results"]["record_count"] == 2
+    with open(out["_oversized_file"], encoding="utf-8") as f:
+        assert json.load(f)["results"] == rows
+    assert len(os.listdir(tmp_download_dir)) == 1

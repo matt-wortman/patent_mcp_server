@@ -12,7 +12,8 @@ characters of the indented JSON text actually sent, because every tool
 declares a 500,000-character result size to it. Every other client, and any
 call made outside an MCP request, keeps the ``MAX_RESPONSE_TOKENS`` estimate.
 A list reply over the limit is cut to its first rows with every row saved to
-disk, and a single-record `results` reply over the limit is saved to disk.
+disk (for Claude Code, as many rows as fit, otherwise 20), and a
+single-record `results` reply over the limit is saved to disk.
 A flat record with no `results` envelope is always returned whole.
 """
 
@@ -318,11 +319,90 @@ def _over_inline_limit(response: Dict[str, Any], max_tokens: Optional[int]) -> b
     """
     if max_tokens:
         return estimate_tokens(response) > max_tokens
-    name = _current_client_name()
-    large_clients = {client.lower() for client in config.LARGE_REPLY_CLIENTS}
-    if name is not None and name.lower() in large_clients:
+    if _uses_char_limit(max_tokens):
         return _sent_text_length(response) > config.CLAUDE_CODE_MAX_RESPONSE_CHARS
     return estimate_tokens(response) > config.MAX_RESPONSE_TOKENS
+
+
+def _uses_char_limit(max_tokens: Optional[int]) -> bool:
+    """True when this reply is checked against the Claude Code character limit.
+
+    That is when the caller gave no explicit ``max_tokens`` and the current
+    client's name is in ``config.LARGE_REPLY_CLIENTS``.
+    """
+    if max_tokens:
+        return False
+    name = _current_client_name()
+    large_clients = {client.lower() for client in config.LARGE_REPLY_CLIENTS}
+    return name is not None and name.lower() in large_clients
+
+
+def _first_rows_reply(
+    response: Dict[str, Any], rows_kept: int, file_path: str, next_offset: int
+) -> Dict[str, Any]:
+    """Build a reply holding the first ``rows_kept`` rows, naming the full file."""
+    original_count = len(response["results"])
+    reply = response.copy()
+    reply["results"] = response["results"][:rows_kept]
+    reply["_truncated"] = True
+    reply["_original_count"] = original_count
+    reply["_truncated_to"] = rows_kept
+    reply["count"] = rows_kept
+    reply["_oversized_file"] = file_path
+    reply["_truncation_message"] = (
+        f"This reply holds the first {rows_kept} of {original_count} results on "
+        f"this page, as many as fit Claude Code's reply size limit. All "
+        f"{original_count} results are saved in full at {file_path}. Read that "
+        f"file for the rest. The next page starts at offset {next_offset}."
+    )
+    return reply
+
+
+def _truncate_list_to_fit(response: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Claude Code only: keep as many leading rows as fit the character limit.
+
+    Every row is saved to disk and the reply names the file and says how many
+    of how many rows it holds. If not even one row fits, the full payload is
+    saved and `results` is replaced by the summary envelope, as for other
+    clients. The reply is measured with every added field in place.
+    """
+    rows = response["results"]
+    limit = config.CLAUDE_CODE_MAX_RESPONSE_CHARS
+    next_offset = (response.get("offset") or 0) + len(rows)
+    # Same length as the real file name: _write_oversized_file uses a
+    # 13-digit millisecond timestamp.
+    placeholder = os.path.join(
+        config.DOWNLOAD_DIR, f"oversized_{source or 'unknown'}_{'9' * 13}.json"
+    )
+
+    def fits(rows_kept: int, file_path: str) -> bool:
+        reply = _first_rows_reply(response, rows_kept, file_path, next_offset)
+        return _sent_text_length(reply) <= limit
+
+    # The whole list did not fit, so the answer is below len(rows).
+    low, high = 0, len(rows) - 1
+    while low < high:
+        middle = (low + high + 1) // 2
+        if fits(middle, placeholder):
+            low = middle
+        else:
+            high = middle - 1
+
+    if low == 0:
+        return _save_oversized_to_disk(response, source)
+
+    file_path, _ = _write_oversized_file(response, source)
+    while low > 0 and not fits(low, file_path):  # guard against a longer path
+        low -= 1
+    if low == 0:
+        os.remove(file_path)
+        return _save_oversized_to_disk(response, source)
+
+    logger.info(
+        f"Kept the first {low} of {len(rows)} results for Claude Code "
+        f"(reply size limit {limit} characters)"
+    )
+    return _first_rows_reply(response, low, file_path, next_offset)
 
 
 def _write_oversized_file(response: Dict[str, Any], source: str) -> Tuple[str, int]:
@@ -419,11 +499,15 @@ def truncate_response(
     token estimate. An explicit ``max_tokens`` always uses the token estimate.
 
     Over the limit:
-    1. List-shaped `results` over max_results → keep the first max_results
-       inline and save the full payload to disk, naming the file. If the
-       sliced list is still over the limit (each item is huge), or the list
-       is already short, save the full payload to disk and replace `results`
-       with a summary envelope.
+    1. List-shaped `results`:
+       - Claude Code → keep as many leading rows as fit its character limit,
+         save every row to disk, and say in the reply how many of how many
+         rows it holds and where the file is.
+       - Other clients → if over max_results, keep the first max_results
+         inline and save the full payload to disk, naming the file.
+       In either case, if no slice fits (each item is huge, or for other
+       clients the list is already short), save the full payload to disk and
+       replace `results` with a summary envelope.
     2. Dict-shaped `results` (single record) → save the full payload to disk
        and replace `results` with a summary envelope.
     3. No `results` key (a flat record, such as a PPUBS patent document) →
@@ -434,7 +518,8 @@ def truncate_response(
     Args:
         response: Response dictionary to potentially truncate
         max_tokens: Explicit token limit (default: the client-aware limit)
-        max_results: Maximum results to keep when truncating
+        max_results: Maximum results to keep when truncating (clients other
+            than Claude Code)
 
     Returns:
         Original or truncated response
@@ -446,6 +531,10 @@ def truncate_response(
 
     # Case 1: list-shaped results — try slicing first
     if "results" in response and isinstance(response["results"], list):
+        # Claude Code: as many rows as fit, not a fixed max_results.
+        if _uses_char_limit(max_tokens):
+            return _truncate_list_to_fit(response, source)
+
         truncated = response.copy()
         original_count = len(truncated["results"])
         if original_count > max_results:
