@@ -129,6 +129,11 @@ mcp = FastMCP(
 from patent_mcp_server.config import PACKAGE_VERSION
 mcp._mcp_server.version = PACKAGE_VERSION
 
+# Every tool declares this result size in its tools/list `_meta`. Claude Code
+# otherwise saves any text result over 50,000 characters to a file and shows
+# the agent only a file-path notice. Other clients ignore the key.
+TOOL_META = {"anthropic/maxResultSizeChars": config.DECLARED_MAX_RESULT_CHARS}
+
 # Set up logging with configured level
 logging.basicConfig(
     level=config.get_log_level(),
@@ -744,7 +749,7 @@ async def _search_patent_by_number(patent_number: str) -> Dict[str, Any]:
 # Diagnostic Tools
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def check_api_status() -> Dict[str, Any]:
     """Check liveness of all patent data sources via real HTTP probes.
 
@@ -826,7 +831,7 @@ async def check_api_status() -> Dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def get_cpc_info(cpc_code: str) -> Dict[str, Any]:
     """Look up CPC (Cooperative Patent Classification) code information.
 
@@ -886,7 +891,7 @@ async def get_cpc_info(cpc_code: str) -> Dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def get_status_code(code: str) -> Dict[str, Any]:
     """Look up USPTO application status code meaning.
 
@@ -908,7 +913,7 @@ async def get_status_code(code: str) -> Dict[str, Any]:
 # PPUBS Tools - Full text patents and PDF downloads
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ppubs_search_patents(
     query: str,
     offset: int = 0,
@@ -969,7 +974,7 @@ async def ppubs_search_patents(
     return check_and_truncate(response)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ppubs_search_applications(
     query: str,
     offset: int = 0,
@@ -1011,7 +1016,7 @@ async def ppubs_search_applications(
     return check_and_truncate(response)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ppubs_get_full_document(
     guid: str, source_type: str, claims_only: bool = False
 ) -> Dict[str, Any]:
@@ -1043,7 +1048,7 @@ async def ppubs_get_full_document(
     return check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ppubs_get_patent_by_number(
     patent_number: str, claims_only: bool = False
 ) -> Dict[str, Any]:
@@ -1085,7 +1090,7 @@ async def ppubs_get_patent_by_number(
     return check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ppubs_download_patent_pdf(patent_number: str) -> Dict[str, Any]:
     """Download a patent as PDF. Saves to disk and returns file path.
 
@@ -1148,7 +1153,7 @@ async def ppubs_download_patent_pdf(patent_number: str) -> Dict[str, Any]:
 # ODP Tools - USPTO Open Data Portal (api.uspto.gov)
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_application(app_num: str) -> Dict[str, Any]:
     """Get patent application data from USPTO Open Data Portal.
 
@@ -1175,7 +1180,7 @@ async def odp_get_application(app_num: str) -> Dict[str, Any]:
     return check_and_truncate(ResponseEnvelope.from_odp(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_application_metadata(app_num: str) -> Dict[str, Any]:
     """Get detailed metadata for a patent application.
 
@@ -1199,7 +1204,7 @@ async def odp_get_application_metadata(app_num: str) -> Dict[str, Any]:
     return ResponseEnvelope.from_odp(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_continuity(app_num: str) -> Dict[str, Any]:
     """Get patent family/continuity data (parent and child applications).
 
@@ -1226,7 +1231,7 @@ async def odp_get_continuity(app_num: str) -> Dict[str, Any]:
     return ResponseEnvelope.from_odp(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_assignment(app_num: str) -> Dict[str, Any]:
     """Get patent assignment/ownership records.
 
@@ -1245,7 +1250,7 @@ async def odp_get_assignment(app_num: str) -> Dict[str, Any]:
     return await api_client.make_request(url)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_adjustment(app_num: str) -> Dict[str, Any]:
     """Get patent term adjustment (PTA) data.
 
@@ -1264,7 +1269,7 @@ async def odp_get_adjustment(app_num: str) -> Dict[str, Any]:
     return await api_client.make_request(url)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_attorney(app_num: str) -> Dict[str, Any]:
     """Get attorney/agent of record for an application.
 
@@ -1280,7 +1285,7 @@ async def odp_get_attorney(app_num: str) -> Dict[str, Any]:
     return await api_client.make_request(url)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_foreign_priority(app_num: str) -> Dict[str, Any]:
     """Get foreign priority claims for an application.
 
@@ -1299,7 +1304,7 @@ async def odp_get_foreign_priority(app_num: str) -> Dict[str, Any]:
     return await api_client.make_request(url)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_transactions(app_num: str) -> Dict[str, Any]:
     """Get prosecution transaction history for an application.
 
@@ -1323,7 +1328,7 @@ async def odp_get_transactions(app_num: str) -> Dict[str, Any]:
     return check_and_truncate(ResponseEnvelope.from_odp(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_documents(app_num: str) -> Dict[str, Any]:
     """Get list of documents in the application file wrapper.
 
@@ -1349,7 +1354,7 @@ async def odp_get_documents(app_num: str) -> Dict[str, Any]:
     return check_and_truncate(ResponseEnvelope.from_odp(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_associated_documents(app_num: str) -> Dict[str, Any]:
     """Get published-document metadata (pre-grant publication and grant XML)
     associated with an application.
@@ -1375,7 +1380,7 @@ async def odp_get_associated_documents(app_num: str) -> Dict[str, Any]:
     return check_and_truncate(ResponseEnvelope.from_odp(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_download_document(
     app_num: str,
     document_id: str,
@@ -1680,7 +1685,7 @@ async def odp_download_document(
     )
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_search_applications(
     query: Optional[str] = None,
     application_number: Optional[str] = None,
@@ -1885,7 +1890,7 @@ def _application_stored_names(input_name: str, record: Dict[str, Any]) -> List[s
     return [applicant] if applicant else []
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_search_datasets(
     query: Optional[str] = None,
     offset: int = 0,
@@ -1916,7 +1921,7 @@ async def odp_search_datasets(
     return await api_client.make_request(url)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_dataset(product_id: str) -> Dict[str, Any]:
     """Get details of a specific bulk dataset product.
 
@@ -1934,7 +1939,7 @@ async def odp_get_dataset(product_id: str) -> Dict[str, Any]:
     )
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_download_dataset_file(file_url: str) -> Dict[str, Any]:
     """Download a bulk dataset product file from USPTO.
 
@@ -1984,7 +1989,7 @@ async def odp_download_dataset_file(file_url: str) -> Dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_search_petition_decisions(
     query: Optional[str] = None,
     app_num: Optional[str] = None,
@@ -2058,7 +2063,7 @@ async def odp_search_petition_decisions(
     return _search_reply(result, "odp", offset, limit, body)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_petition_decision(record_id: str) -> Dict[str, Any]:
     """Get one final petition decision by its record identifier.
 
@@ -2083,7 +2088,7 @@ async def odp_get_petition_decision(record_id: str) -> Dict[str, Any]:
 # ODP Office Actions - examiner letters, 2007 to present
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_search_office_actions(
     query: Optional[str] = None,
     app_num: Optional[str] = None,
@@ -2188,7 +2193,7 @@ async def odp_search_office_actions(
     return _search_reply(result, "odp", offset, limit, body)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_office_action(record_id: str) -> Dict[str, Any]:
     """Get one office action's details by its record identifier.
 
@@ -2214,7 +2219,7 @@ async def odp_get_office_action(record_id: str) -> Dict[str, Any]:
     return check_and_truncate(ResponseEnvelope.from_odp(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def odp_get_office_action_text(record_id: str) -> Dict[str, Any]:
     """Get the complete text of one office action.
 
@@ -2263,7 +2268,7 @@ async def odp_get_office_action_text(record_id: str) -> Dict[str, Any]:
 # PTAB Tools - Patent Trial and Appeal Board
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_search_proceedings(
     query: Optional[str] = None,
     trial_type: Optional[str] = None,
@@ -2366,7 +2371,7 @@ def _party_stored_names(_input_name: str, record: Dict[str, Any]) -> List[str]:
     return names
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_get_proceeding(proceeding_number: str) -> Dict[str, Any]:
     """Get details of a specific PTAB proceeding.
 
@@ -2379,7 +2384,7 @@ async def ptab_get_proceeding(proceeding_number: str) -> Dict[str, Any]:
     return await ptab_client.get_proceeding(proceeding_number)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_search_decisions(
     query: Optional[str] = None,
     decision_type: Optional[str] = None,
@@ -2425,7 +2430,7 @@ async def ptab_search_decisions(
     return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_get_decision(decision_id: str) -> Dict[str, Any]:
     """Get details of a specific PTAB decision.
 
@@ -2435,7 +2440,7 @@ async def ptab_get_decision(decision_id: str) -> Dict[str, Any]:
     return await ptab_client.get_decision(decision_id)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_search_trial_documents(
     query: Optional[str] = None,
     proceeding_number: Optional[str] = None,
@@ -2469,7 +2474,7 @@ async def ptab_search_trial_documents(
     return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_get_proceeding_documents(proceeding_number: str) -> Dict[str, Any]:
     """Get all documents filed in one PTAB proceeding.
 
@@ -2489,7 +2494,7 @@ async def ptab_get_proceeding_documents(proceeding_number: str) -> Dict[str, Any
     return check_and_truncate(ResponseEnvelope.from_ptab(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_search_appeal_decisions(
     query: Optional[str] = None,
     appeal_number: Optional[str] = None,
@@ -2533,7 +2538,7 @@ async def ptab_search_appeal_decisions(
     return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_get_appeal_decisions(appeal_number: str) -> Dict[str, Any]:
     """Get decisions for one PTAB ex parte appeal.
 
@@ -2553,7 +2558,7 @@ async def ptab_get_appeal_decisions(appeal_number: str) -> Dict[str, Any]:
     return check_and_truncate(ResponseEnvelope.from_ptab(result))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_search_interference_decisions(
     query: Optional[str] = None,
     interference_number: Optional[str] = None,
@@ -2588,7 +2593,7 @@ async def ptab_search_interference_decisions(
     return _search_reply(result, "ptab", offset, limit, result.get("query_sent", {}))
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def ptab_get_interference_decisions(interference_number: str) -> Dict[str, Any]:
     """Get decisions for one PTAB interference.
 
@@ -2612,7 +2617,7 @@ async def ptab_get_interference_decisions(interference_number: str) -> Dict[str,
 # DSAPI Tools — USPTO Data Set API (api.uspto.gov)
 # =====================================================================
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_search_enriched_citations(
     patent_app_number: str,
     rows: int = 25,
@@ -2653,7 +2658,7 @@ async def dsapi_search_enriched_citations(
     return result if is_error(result) else check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_get_citation_details(
     criteria: str,
     start: int = 0,
@@ -2695,7 +2700,7 @@ async def dsapi_get_citation_details(
     return result if is_error(result) else check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_search_litigation(
     criteria: str,
     start: int = 0,
@@ -2736,7 +2741,7 @@ async def dsapi_search_litigation(
     return result if is_error(result) else check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_get_patent_litigation(
     patent_number: str,
     rows: int = 25,
@@ -2777,7 +2782,7 @@ async def dsapi_get_patent_litigation(
     return result if is_error(result) else check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_search_rejections(
     patent_app_number: str,
     rows: int = 25,
@@ -2821,7 +2826,7 @@ async def dsapi_search_rejections(
     return result if is_error(result) else check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_search_oa_citations(
     patent_app_number: str,
     rows: int = 25,
@@ -2863,7 +2868,7 @@ async def dsapi_search_oa_citations(
     return result if is_error(result) else check_and_truncate(result)
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_search_office_actions(
     patent_app_number: str,
     rows: int = 5,
@@ -2929,7 +2934,7 @@ async def dsapi_search_office_actions(
     )
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_lookup_status_code(
     status_code: str,
 ) -> Dict[str, Any]:
@@ -2964,7 +2969,7 @@ async def dsapi_lookup_status_code(
     )
 
 
-@mcp.tool()
+@mcp.tool(meta=TOOL_META)
 async def dsapi_list_status_codes(
     criteria: str = "*:*",
     rows: int = 50,

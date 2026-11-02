@@ -2,10 +2,14 @@
 import json
 import os
 import tempfile
+from types import SimpleNamespace
 
+import pydantic_core
 import pytest
+from mcp.server.lowlevel.server import request_ctx
 
-from patent_mcp_server.config import config
+import patent_mcp_server.util.response as response_mod
+from patent_mcp_server.config import claude_code_max_response_chars, config
 from patent_mcp_server.util.response import (
     ResponseEnvelope,
     check_and_truncate,
@@ -272,3 +276,165 @@ def test_claims_only_document_keeps_identity_and_claims_only():
     }
     assert reduced["claims"].startswith("1. A method of treating a glioblastoma")
     assert reduced["assigneeName"] == ["Children's Hospital Medical Center"]
+
+
+# ----------------------------------------------------------------------
+# Complete flat records are never flagged as saved to disk
+# ----------------------------------------------------------------------
+
+def _flat_patent_record():
+    """A PPUBS document reply: one flat record, no `results` envelope."""
+    return {
+        "guid": "US-6237565-B1",
+        "inventionTitle": "Example",
+        "claimsHtml": "<b>1</b>. A thing. <br />",
+        "descriptionHtml": "d" * 60_000,  # ~15,000 estimated tokens
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("client_name", [None, "mcp", "claude-code"])
+def test_flat_record_over_limit_is_returned_unchanged(
+    monkeypatch, tmp_download_dir, client_name
+):
+    """A flat record already holds every field inline, so it is returned as is.
+
+    Regression: the no-envelope branch copied the record, kept every field
+    inline, and added a `results` summary claiming the payload had been saved
+    to disk because it was too big. The notice was false (US 6,237,565 probe).
+    """
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: client_name)
+    record = _flat_patent_record()
+    original = json.loads(json.dumps(record))
+
+    for out in (check_and_truncate(record), truncate_response(record, max_tokens=100)):
+        assert out == original
+        assert "_oversized" not in out
+        assert "_oversized_file" not in out
+        assert "results" not in out
+    assert os.listdir(tmp_download_dir) == []
+
+
+# ----------------------------------------------------------------------
+# Client-aware inline limit
+# ----------------------------------------------------------------------
+
+def _hundred_row_page():
+    """100 rows, ~10,000 estimated tokens: over 8,000, far under 450,000 chars."""
+    rows = [{"i": i, "title": f"record {i} " + "t" * 380} for i in range(100)]
+    return ResponseEnvelope.success(
+        results=rows, source="ppubs", total=536, offset=0, limit=100,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("client_name", [None, "mcp", "codex-mcp-client"])
+def test_other_clients_keep_the_token_limit(monkeypatch, tmp_download_dir, client_name):
+    """Any client other than Claude Code (or none) is cut to 20 rows, as before."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: client_name)
+    response = _hundred_row_page()
+    assert estimate_tokens(response) > config.MAX_RESPONSE_TOKENS
+
+    out = check_and_truncate(response)
+
+    assert out["count"] == 20
+    assert len(out["results"]) == 20
+    assert out["_truncated"] is True
+    assert "_truncation_message" in out
+    with open(out["_oversized_file"], encoding="utf-8") as f:
+        assert len(json.load(f)["results"]) == 100
+
+
+@pytest.mark.unit
+def test_no_request_context_keeps_the_token_limit(tmp_download_dir):
+    """Outside an MCP request there is no client name: today's rule applies."""
+    out = check_and_truncate(_hundred_row_page())
+    assert out["count"] == 20
+    assert out["_truncated"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("client_name", ["claude-code", "Claude-Code"])
+def test_claude_code_gets_the_whole_page(monkeypatch, tmp_download_dir, client_name):
+    """Claude Code receives all 100 rows when the sent text fits its limit."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: client_name)
+    response = _hundred_row_page()
+
+    out = check_and_truncate(response)
+
+    assert out is response
+    assert out["count"] == 100
+    assert len(out["results"]) == 100
+    assert "_truncated" not in out
+    assert os.listdir(tmp_download_dir) == []
+
+
+@pytest.mark.unit
+def test_claude_code_limit_measures_the_indented_text(monkeypatch, tmp_download_dir):
+    """The size checked is the indented JSON FastMCP sends, not compact JSON."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    monkeypatch.setattr(config, "CLAUDE_CODE_MAX_RESPONSE_CHARS", 20_000)
+    response = ResponseEnvelope.success(
+        results={"rows": [[i, i] for i in range(1_000)]}, source="odp",
+    )
+    compact = len(json.dumps(response, default=str))
+    sent = len(pydantic_core.to_json(response, fallback=str, indent=2).decode())
+    assert compact < 20_000 < sent  # the case this test exists for
+
+    out = check_and_truncate(response)
+
+    assert out["_oversized"] is True
+    assert os.path.isfile(out["_oversized_file"])
+    with open(out["_oversized_file"], encoding="utf-8") as f:
+        assert json.load(f)["results"] == response["results"]
+
+
+@pytest.mark.unit
+def test_explicit_max_tokens_uses_the_token_rule_for_claude_code(
+    monkeypatch, tmp_download_dir
+):
+    """A caller's explicit token limit wins over the client-aware limit."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    out = truncate_response(_hundred_row_page(), max_tokens=2_000, max_results=5)
+    assert out["_truncated"] is True
+    assert out["count"] == 5
+
+
+@pytest.mark.unit
+def test_client_name_read_from_request_context():
+    """The name comes from the initialize clientInfo of the current session."""
+    assert response_mod._current_client_name() is None  # no request
+
+    info = SimpleNamespace(clientInfo=SimpleNamespace(name="claude-code"))
+    token = request_ctx.set(SimpleNamespace(session=SimpleNamespace(client_params=info)))
+    try:
+        assert response_mod._current_client_name() == "claude-code"
+    finally:
+        request_ctx.reset(token)
+
+    token = request_ctx.set(SimpleNamespace(session=SimpleNamespace(client_params=None)))
+    try:
+        assert response_mod._current_client_name() is None
+    finally:
+        request_ctx.reset(token)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "raw, expected",
+    [(None, 450_000), ("300000", 300_000), ("490000", 490_000), ("2000000", 490_000)],
+)
+def test_claude_code_char_limit_is_clamped(raw, expected):
+    """The setting defaults to 450,000 and never exceeds 490,000."""
+    assert claude_code_max_response_chars(raw) == expected
+
+
+@pytest.mark.unit
+def test_scalar_results_over_limit_still_moves_to_disk(tmp_download_dir):
+    """A `results` string over the limit is replaced by the summary, truthfully."""
+    response = {"success": True, "source": "odp", "results": "s" * 50_000}
+    out = check_and_truncate(response)
+    assert out["_oversized"] is True
+    assert out["results"]["_shape"] == "str"
+    with open(out["_oversized_file"], encoding="utf-8") as f:
+        assert json.load(f)["results"] == "s" * 50_000

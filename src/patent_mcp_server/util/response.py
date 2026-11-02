@@ -3,8 +3,17 @@ Response normalization utilities for consistent API responses.
 
 This module provides utilities for:
 - Standardizing response format across different backends
-- Token budget awareness and response truncation
+- Reply size limits and response truncation
 - Response envelope creation
+
+Reply size limits: Claude Code (identified by the client name it sends in
+MCP initialize) may receive replies up to ``CLAUDE_CODE_MAX_RESPONSE_CHARS``
+characters of the indented JSON text actually sent, because every tool
+declares a 500,000-character result size to it. Every other client, and any
+call made outside an MCP request, keeps the ``MAX_RESPONSE_TOKENS`` estimate.
+A list reply over the limit is cut to its first rows with every row saved to
+disk, and a single-record `results` reply over the limit is saved to disk.
+A flat record with no `results` envelope is always returned whole.
 """
 
 import html
@@ -14,6 +23,9 @@ import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+import pydantic_core
+from mcp.server.lowlevel.server import request_ctx
 
 from patent_mcp_server.config import config
 
@@ -260,6 +272,59 @@ def estimate_tokens(data: Any) -> int:
         return len(str(data)) // 4
 
 
+def _current_client_name() -> Optional[str]:
+    """Return the MCP client's self-reported name for the current request.
+
+    Reads ``clientInfo.name`` from the session's initialize parameters.
+    Returns None outside an MCP request (for example in unit tests) or when
+    the client sent no initialize parameters.
+    """
+    try:
+        ctx = request_ctx.get()
+    except LookupError:
+        return None
+    try:
+        client_params = ctx.session.client_params
+        if client_params is None:
+            return None
+        name = client_params.clientInfo.name
+    except AttributeError:
+        return None
+    return name if isinstance(name, str) else None
+
+
+def _sent_text_length(response: Dict[str, Any]) -> int:
+    """Length of the text FastMCP sends for this reply.
+
+    FastMCP turns a dict reply into text with this exact call
+    (``mcp/server/fastmcp/utilities/func_metadata.py``). It also sends the
+    reply as structured content, and Claude Code 2.1.316 shows the agent that
+    structured form as compact JSON, which was about 30% shorter in live
+    checks. The indented text is never the shorter of the two, so measuring
+    it keeps every reply inside what Claude Code shows inline.
+    """
+    return len(pydantic_core.to_json(response, fallback=str, indent=2).decode())
+
+
+def _over_inline_limit(response: Dict[str, Any], max_tokens: Optional[int]) -> bool:
+    """Decide whether a reply is too large to send inline.
+
+    - An explicit ``max_tokens`` from the caller: today's token estimate
+      against that value.
+    - Otherwise, a client named in ``config.LARGE_REPLY_CLIENTS`` (Claude
+      Code): the length of the indented text actually sent against
+      ``config.CLAUDE_CODE_MAX_RESPONSE_CHARS``.
+    - Otherwise: the token estimate against ``config.MAX_RESPONSE_TOKENS``.
+    """
+    if max_tokens:
+        return estimate_tokens(response) > max_tokens
+    name = _current_client_name()
+    large_clients = {client.lower() for client in config.LARGE_REPLY_CLIENTS}
+    if name is not None and name.lower() in large_clients:
+        return _sent_text_length(response) > config.CLAUDE_CODE_MAX_RESPONSE_CHARS
+    return estimate_tokens(response) > config.MAX_RESPONSE_TOKENS
+
+
 def _write_oversized_file(response: Dict[str, Any], source: str) -> Tuple[str, int]:
     """Write the full response as JSON to the download folder.
 
@@ -347,29 +412,34 @@ def truncate_response(
     max_tokens: Optional[int] = None,
     max_results: int = 20,
 ) -> Dict[str, Any]:
-    """Truncate a response if it exceeds token budget.
+    """Truncate a response if it is over the inline size limit.
 
-    Handles three cases:
+    The limit depends on the client (see ``_over_inline_limit``): Claude Code
+    gets a character limit on the text actually sent, every other client the
+    token estimate. An explicit ``max_tokens`` always uses the token estimate.
+
+    Over the limit:
     1. List-shaped `results` over max_results → keep the first max_results
-       inline and save the full payload to disk, naming the file.
-    2. Dict-shaped `results` (single record) still over budget → save full
-       payload to disk, replace `results` with a summary envelope.
-    3. List still oversized after slicing (each item is huge) → save full
-       payload to disk, replace `results` with a summary envelope.
+       inline and save the full payload to disk, naming the file. If the
+       sliced list is still over the limit (each item is huge), or the list
+       is already short, save the full payload to disk and replace `results`
+       with a summary envelope.
+    2. Dict-shaped `results` (single record) → save the full payload to disk
+       and replace `results` with a summary envelope.
+    3. No `results` key (a flat record, such as a PPUBS patent document) →
+       return it unchanged. Every field would stay inline anyway, so a disk
+       copy would only add a false "saved to disk" notice. A `results` value
+       of any other type is saved to disk and replaced by the summary.
 
     Args:
         response: Response dictionary to potentially truncate
-        max_tokens: Maximum tokens allowed (default from config)
+        max_tokens: Explicit token limit (default: the client-aware limit)
         max_results: Maximum results to keep when truncating
 
     Returns:
         Original or truncated response
     """
-    max_tokens = max_tokens or config.MAX_RESPONSE_TOKENS
-
-    estimated_tokens = estimate_tokens(response)
-
-    if estimated_tokens <= max_tokens:
+    if not _over_inline_limit(response, max_tokens):
         return response
 
     source = response.get("source", "unknown")
@@ -386,13 +456,13 @@ def truncate_response(
             truncated["count"] = max_results
             logger.info(
                 f"Truncated response from {original_count} to {max_results} results "
-                f"(estimated {estimated_tokens} tokens exceeded {max_tokens} limit)"
+                f"(over the inline size limit)"
             )
 
             # Re-check: if still oversized, fall through to disk-save.
             # Save the ORIGINAL response — the summary promises the full
             # payload is on disk, so saving the sliced copy loses records.
-            if estimate_tokens(truncated) > max_tokens:
+            if _over_inline_limit(truncated, max_tokens):
                 return _save_oversized_to_disk(response, source)
 
             # The preview stays inline, but every row also goes to disk: the
@@ -416,8 +486,14 @@ def truncate_response(
     if "results" in response and isinstance(response["results"], dict):
         return _save_oversized_to_disk(response, source)
 
-    # Case 3: no recognizable results envelope but oversized — also disk-save
-    # so nothing blows the context window unnoticed.
+    # Case 3: no `results` key at all (a flat record). A disk save here would
+    # keep every field inline and only add a `results` summary falsely
+    # claiming the payload was moved to disk, so return it whole.
+    if "results" not in response:
+        return response
+
+    # A `results` value of some other type (a long string, say) is replaced
+    # by the summary, so the payload really does move to disk.
     return _save_oversized_to_disk(response, source)
 
 
@@ -427,11 +503,12 @@ def check_and_truncate(
 ) -> Dict[str, Any]:
     """Check response size and truncate if necessary.
 
-    This is the main function to call before returning responses.
+    This is the main function to call before returning responses. The size
+    limit is client-aware; see ``truncate_response``.
 
     Args:
         response: Response to check
-        max_tokens: Optional token limit override
+        max_tokens: Optional explicit token limit (overrides the client-aware limit)
 
     Returns:
         Original or truncated response

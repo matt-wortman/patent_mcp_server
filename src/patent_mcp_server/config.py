@@ -23,6 +23,25 @@ try:
 except PackageNotFoundError:
     PACKAGE_VERSION = "0.0.0+uninstalled"
 
+# Claude Code saves any MCP text result over 50,000 characters to a file and
+# shows the agent only a file-path notice, unless the tool declares a larger
+# size in its tools/list ``_meta["anthropic/maxResultSizeChars"]``. Claude Code
+# honours that declaration up to a hard ceiling of 500,000 characters.
+CLAUDE_CODE_RESULT_CEILING_CHARS = 500_000
+
+# Inline replies to Claude Code stay this far under the declared size, so the
+# reply plus any notice fields the server adds still fits.
+CLAUDE_CODE_MAX_RESPONSE_CHARS_CAP = 490_000
+
+
+def claude_code_max_response_chars(raw: Optional[str]) -> int:
+    """Return the inline character limit for Claude Code from its setting.
+
+    Defaults to 450,000 and is clamped to at most 490,000.
+    """
+    value = int(raw) if raw is not None else 450_000
+    return min(value, CLAUDE_CODE_MAX_RESPONSE_CHARS_CAP)
+
 
 class Config:
     """Centralized configuration class."""
@@ -56,6 +75,18 @@ class Config:
     # Response Size Management (for LLM context windows)
     MAX_RESPONSE_TOKENS: int = int(os.getenv("MAX_RESPONSE_TOKENS", "8000"))
     TRUNCATE_LARGE_RESPONSES: bool = os.getenv("TRUNCATE_LARGE_RESPONSES", "true").lower() == "true"
+
+    # Every tool declares this result size to Claude Code (see above).
+    DECLARED_MAX_RESULT_CHARS: int = CLAUDE_CODE_RESULT_CEILING_CHARS
+    # MCP clients (initialize clientInfo.name, compared case-insensitively)
+    # that get the character limit below instead of MAX_RESPONSE_TOKENS.
+    # "claude-code" is the name Claude Code 2.1.316 sends, observed directly.
+    LARGE_REPLY_CLIENTS: tuple = ("claude-code",)
+    # Inline limit for those clients, measured on the indented JSON text
+    # FastMCP actually sends.
+    CLAUDE_CODE_MAX_RESPONSE_CHARS: int = claude_code_max_response_chars(
+        os.getenv("CLAUDE_CODE_MAX_RESPONSE_CHARS")
+    )
 
     # Download directory for large binary payloads (PDFs) and oversized JSON
     # dumps. Defaults to <tempdir>/patent_docs; override via env.

@@ -108,6 +108,10 @@ ENABLE_CACHING=true        # Enable/disable session caching
 # Response Size Management (for LLM context windows)
 MAX_RESPONSE_TOKENS=8000        # Oversized responses are saved to disk instead
 TRUNCATE_LARGE_RESPONSES=true
+CLAUDE_CODE_MAX_RESPONSE_CHARS=450000  # Inline limit for Claude Code (capped at 490000)
+# Replies to Claude Code may run to CLAUDE_CODE_MAX_RESPONSE_CHARS characters,
+# because every tool declares a 500,000-character result size to it.
+# Other clients keep the MAX_RESPONSE_TOKENS limit (8,000 tokens by default).
 
 # Downloads (PDFs and oversized JSON responses)
 PATENT_MCP_DOWNLOAD_DIR=/tmp/patent_docs  # Default: <system temp dir>/patent_docs
