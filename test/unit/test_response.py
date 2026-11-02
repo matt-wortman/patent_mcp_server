@@ -512,3 +512,71 @@ def test_claude_code_single_row_too_big_goes_to_disk(monkeypatch, tmp_download_d
     with open(out["_oversized_file"], encoding="utf-8") as f:
         assert json.load(f)["results"] == rows
     assert len(os.listdir(tmp_download_dir)) == 1
+
+
+# ----------------------------------------------------------------------
+# Honest wording: next-page sentence and which limit was exceeded
+# ----------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_claude_code_message_names_next_page_only_when_there_is_one(
+    monkeypatch, tmp_download_dir
+):
+    """A last page must not announce a next page (Codex review finding 5)."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    monkeypatch.setattr(config, "CLAUDE_CODE_MAX_RESPONSE_CHARS", 20_000)
+
+    more = check_and_truncate(_hundred_row_page())  # total 536: has_more true
+    assert more["has_more"] is True
+    assert "The next page starts at offset 100." in more["_truncation_message"]
+
+    rows = [{"id": i, "blob": "y" * 8_000} for i in range(5)]
+    last = check_and_truncate(
+        ResponseEnvelope.success(results=rows, source="ppubs", total=5, limit=5)
+    )
+    assert last["has_more"] is False
+    assert "next page" not in last["_truncation_message"]
+    assert "offset" not in last["_truncation_message"]
+
+
+@pytest.mark.unit
+def test_character_limit_save_names_claude_code_limit(monkeypatch, tmp_download_dir):
+    """A save caused by the character limit says so (Codex review finding 6)."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: "claude-code")
+    monkeypatch.setattr(config, "CLAUDE_CODE_MAX_RESPONSE_CHARS", 20_000)
+    dict_reply = ResponseEnvelope.success(
+        results={"rows": [[i, i] for i in range(1_000)]}, source="odp",
+    )
+    assert estimate_tokens(dict_reply) < config.MAX_RESPONSE_TOKENS  # not a token failure
+    huge_rows = ResponseEnvelope.success(
+        results=[{"id": 0, "blob": "y" * 30_000}], source="ppubs", total=1, limit=1,
+    )
+    for reply in (dict_reply, huge_rows):
+        message = check_and_truncate(reply)["results"]["_message"]
+        assert message.startswith(
+            "Response exceeded Claude Code's reply size limit; full payload saved to disk."
+        )
+        assert "token" not in message
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("client_name", [None, "mcp", "claude-code"])
+def test_token_limit_save_keeps_token_wording(monkeypatch, tmp_download_dir, client_name):
+    """A save caused by a token limit keeps today's wording, for any client."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: client_name)
+    response = ResponseEnvelope.success(
+        results={f"field_{i}": "x" * 500 for i in range(50)}, source="odp",
+    )
+    # Explicit max_tokens forces the token rule even for Claude Code.
+    out = truncate_response(response, max_tokens=100)
+    assert out["results"]["_message"] == (
+        "Response exceeded token budget; full payload saved to disk. "
+        "Read the file for complete data."
+    )
+    if client_name != "claude-code":
+        default = check_and_truncate(
+            ResponseEnvelope.success(
+                results={f"field_{i}": "x" * 2_000 for i in range(50)}, source="odp",
+            )
+        )
+        assert default["results"]["_message"].startswith("Response exceeded token budget;")

@@ -349,12 +349,16 @@ def _first_rows_reply(
     reply["_truncated_to"] = rows_kept
     reply["count"] = rows_kept
     reply["_oversized_file"] = file_path
-    reply["_truncation_message"] = (
+    message = (
         f"This reply holds the first {rows_kept} of {original_count} results on "
         f"this page, as many as fit Claude Code's reply size limit. All "
         f"{original_count} results are saved in full at {file_path}. Read that "
-        f"file for the rest. The next page starts at offset {next_offset}."
+        f"file for the rest."
     )
+    # Only a page with more results after it has a next page to name.
+    if response.get("has_more") is True:
+        message += f" The next page starts at offset {next_offset}."
+    reply["_truncation_message"] = message
     return reply
 
 
@@ -389,14 +393,14 @@ def _truncate_list_to_fit(response: Dict[str, Any], source: str) -> Dict[str, An
             high = middle - 1
 
     if low == 0:
-        return _save_oversized_to_disk(response, source)
+        return _save_oversized_to_disk(response, source, "characters")
 
     file_path, _ = _write_oversized_file(response, source)
     while low > 0 and not fits(low, file_path):  # guard against a longer path
         low -= 1
     if low == 0:
         os.remove(file_path)
-        return _save_oversized_to_disk(response, source)
+        return _save_oversized_to_disk(response, source, "characters")
 
     logger.info(
         f"Kept the first {low} of {len(rows)} results for Claude Code "
@@ -432,15 +436,31 @@ def _write_oversized_file(response: Dict[str, Any], source: str) -> Tuple[str, i
     return file_path, len(serialized.encode("utf-8"))
 
 
+# Summary message for a disk save, by the kind of limit that was exceeded.
+_OVERSIZED_MESSAGES = {
+    "tokens": (
+        "Response exceeded token budget; full payload saved to disk. "
+        "Read the file for complete data."
+    ),
+    "characters": (
+        "Response exceeded Claude Code's reply size limit; full payload saved "
+        "to disk. Read the file for complete data."
+    ),
+}
+
+
 def _save_oversized_to_disk(
     response: Dict[str, Any],
     source: str,
+    limit_kind: str = "tokens",
 ) -> Dict[str, Any]:
     """Serialize an oversized response to disk and return a summary envelope.
 
     Writes the full response with ``_write_oversized_file`` and returns a
-    small summary that replaces the `results` payload so the caller stays
-    under the token budget.
+    small summary that replaces the `results` payload so the reply stays
+    under its size limit. ``limit_kind`` names the limit that was exceeded,
+    "tokens" (the token estimate) or "characters" (Claude Code's reply size
+    limit), so the summary message says which one it was.
     """
     file_path, size_bytes = _write_oversized_file(response, source)
     est = estimate_tokens(response)
@@ -467,10 +487,7 @@ def _save_oversized_to_disk(
         "estimated_tokens": est,
         "record_count": record_count,
         "preview_keys": preview_keys,
-        "_message": (
-            "Response exceeded token budget; full payload saved to disk. "
-            "Read the file for complete data."
-        ),
+        "_message": _OVERSIZED_MESSAGES[limit_kind],
     }
 
     logger.info(
@@ -571,9 +588,11 @@ def truncate_response(
         # List is short but still oversized — items themselves are huge.
         return _save_oversized_to_disk(response, source)
 
+    limit_kind = "characters" if _uses_char_limit(max_tokens) else "tokens"
+
     # Case 2: dict-shaped results (single record) — save to disk
     if "results" in response and isinstance(response["results"], dict):
-        return _save_oversized_to_disk(response, source)
+        return _save_oversized_to_disk(response, source, limit_kind)
 
     # Case 3: no `results` key at all (a flat record). A disk save here would
     # keep every field inline and only add a `results` summary falsely
@@ -583,7 +602,7 @@ def truncate_response(
 
     # A `results` value of some other type (a long string, say) is replaced
     # by the summary, so the payload really does move to disk.
-    return _save_oversized_to_disk(response, source)
+    return _save_oversized_to_disk(response, source, limit_kind)
 
 
 def check_and_truncate(
