@@ -580,3 +580,35 @@ def test_token_limit_save_keeps_token_wording(monkeypatch, tmp_download_dir, cli
             )
         )
         assert default["results"]["_message"].startswith("Response exceeded token budget;")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("client_name", [None, "mcp", "codex-mcp-client"])
+def test_twenty_row_message_names_next_page_only_when_there_is_one(
+    monkeypatch, tmp_download_dir, client_name
+):
+    """Other clients: a last page must not announce a next page (approved by Matt)."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: client_name)
+    rows = [{"i": i, "title": f"record {i} " + "t" * 380} for i in range(100)]
+
+    more = check_and_truncate(
+        ResponseEnvelope.success(results=rows, source="ppubs", total=536, offset=0, limit=100)
+    )
+    assert more["has_more"] is True
+    assert more["count"] == 20
+    assert more["_truncation_message"].endswith(" The next page starts at offset 100.")
+
+    last = check_and_truncate(
+        ResponseEnvelope.success(results=rows, source="ppubs", total=100, offset=0, limit=100)
+    )
+    assert last["has_more"] is False
+    assert last["count"] == 20
+    message = last["_truncation_message"]
+    assert "next page" not in message
+    assert "offset" not in message
+    # The rest of the message is today's wording, unchanged.
+    assert message == (
+        f"Showing the first 20 of 100 results to fit the token budget. All 100 "
+        f"results are saved in full at {last['_oversized_file']}; read that file "
+        f"for the rest."
+    )

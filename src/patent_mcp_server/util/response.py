@@ -577,12 +577,15 @@ def truncate_response(
             file_path, _ = _write_oversized_file(response, source)
             next_offset = (response.get("offset") or 0) + original_count
             truncated["_oversized_file"] = file_path
-            truncated["_truncation_message"] = (
+            message = (
                 f"Showing the first {max_results} of {original_count} results to fit "
                 f"the token budget. All {original_count} results are saved in full at "
-                f"{file_path}; read that file for the rest. The next page starts at "
-                f"offset {next_offset}."
+                f"{file_path}; read that file for the rest."
             )
+            # Only a page with more results after it has a next page to name.
+            if response.get("has_more") is True:
+                message += f" The next page starts at offset {next_offset}."
+            truncated["_truncation_message"] = message
             return truncated
 
         # List is short but still oversized — items themselves are huge.
