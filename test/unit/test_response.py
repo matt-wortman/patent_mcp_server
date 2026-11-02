@@ -612,3 +612,41 @@ def test_twenty_row_message_names_next_page_only_when_there_is_one(
         f"results are saved in full at {last['_oversized_file']}; read that file "
         f"for the rest."
     )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("client_name", [None, "mcp", "codex-mcp-client"])
+def test_twenty_row_message_boundaries(monkeypatch, tmp_download_dir, client_name):
+    """Other clients: next-page sentence at the edges (Codex check, optional item)."""
+    monkeypatch.setattr(response_mod, "_current_client_name", lambda: client_name)
+    rows = [{"i": i, "title": f"record {i} " + "t" * 380} for i in range(100)]
+
+    # A middle page that does not start at row 0 names the right next offset.
+    middle = check_and_truncate(
+        ResponseEnvelope.success(results=rows, source="ppubs", total=536, offset=200, limit=100)
+    )
+    assert middle["has_more"] is True
+    assert middle["_truncation_message"].endswith(" The next page starts at offset 300.")
+
+    # The last page at a nonzero offset names no next page.
+    last = check_and_truncate(
+        ResponseEnvelope.success(results=rows, source="ppubs", total=536, offset=436, limit=100)
+    )
+    assert last["has_more"] is False
+    assert last["count"] == 20
+    assert "next page" not in last["_truncation_message"]
+
+    # An unknown total never claims another page.
+    unknown = check_and_truncate(
+        ResponseEnvelope.success(results=rows, source="ppubs", offset=0, limit=100)
+    )
+    assert unknown["has_more"] is False
+    assert unknown["count"] == 20
+    assert "next page" not in unknown["_truncation_message"]
+
+    # Exactly 20 rows never go through the 20-row cut message.
+    twenty = check_and_truncate(
+        ResponseEnvelope.success(results=rows[:20], source="ppubs", total=536, offset=0, limit=20)
+    )
+    assert not str(twenty.get("_truncation_message", "")).startswith("Showing the first 20")
+    assert "_truncated_to" not in twenty
